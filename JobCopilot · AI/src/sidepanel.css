@@ -23,6 +23,7 @@ input[type=file] { width: 100%; font-size: 12px; }
 .row { display: flex; gap: 8px; }
 .col { flex: 1; }
 .privacy-note { color: #777; font-size: 11.5px; line-height: 1.5; margin-top: 5px; }
+.run-note { color: #777; font-size: 11px; line-height: 1.45; margin-top: 7px; }
 .cfg-actions { display: flex; gap: 8px; }
 .resume-actions { display: flex; gap: 8px; margin-top: 7px; }
 .parse-status { color: #777; font-size: 11.5px; line-height: 1.5; margin-top: 6px; }
@@ -60,6 +61,7 @@ input[type=file] { width: 100%; font-size: 12px; }
 #reviewList { margin-top: 10px; max-height: 260px; overflow-y: auto; }
 .job-item { display: flex; gap: 8px; padding: 7px; border-bottom: 1px solid #f0f0f0; align-items: flex-start; }
 .job-item.skip { opacity: .55; }
+.job-item.processed { opacity: .62; }
 .job-item input { margin-top: 3px; }
 .job-main { flex: 1; }
 .job-title { font-weight: 600; }

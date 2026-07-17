@@ -4,6 +4,13 @@ const CFG_FIELDS = ['muskApiKey', 'gptModel', 'resumeText', 'keyword', 'city', '
 const DEFAULT_MODEL = 'gpt-5.6-terra';
 let selectedResumeFile = null;
 let deliverySubmitPending = false;
+let processedJobs = {};
+let keepAlivePort = null;
+let keepAliveTimer = null;
+let keepAliveReconnectTimer = null;
+let keepAliveExpected = false;
+let backendActiveSeen = false;
+let backendLossReported = false;
 
 // 折叠
 document.querySelectorAll('.card-h[data-toggle]').forEach(h => {
@@ -14,13 +21,15 @@ document.querySelectorAll('.card-h[data-toggle]').forEach(h => {
 });
 
 // 载入配置
-chrome.storage.local.get(CFG_FIELDS.concat(['resumeImage', 'resumeImages']), (d) => {
+chrome.storage.local.get(CFG_FIELDS.concat(['resumeImage', 'resumeImages', 'processed', 'sw_screened']), (d) => {
   CFG_FIELDS.forEach(f => { if (d[f] !== undefined && $(f)) $(f).value = d[f]; });
   if (!d.gptModel) $('gptModel').value = DEFAULT_MODEL;
+  processedJobs = d.processed || {};
   const images = Array.isArray(d.resumeImages) && d.resumeImages.length
     ? d.resumeImages
     : (d.resumeImage ? [d.resumeImage] : []);
   if (images.length) showImages(images);
+  if (Array.isArray(d.sw_screened) && d.sw_screened.length) renderReview(d.sw_screened);
 });
 
 function showImages(images) {
@@ -289,12 +298,74 @@ function stopDelivery() {
 }
 $('btnStop').addEventListener('click', stopDelivery);
 $('btnReviewStop').addEventListener('click', stopDelivery);
-$('btnReset').addEventListener('click', () => { chrome.runtime.sendMessage({ type: 'RESET' }); $('reviewCard').style.display = 'none'; setRunning(false); });
+$('btnReset').addEventListener('click', () => {
+  processedJobs = {};
+  chrome.runtime.sendMessage({ type: 'RESET' });
+  $('reviewCard').style.display = 'none';
+  setRunning(false);
+});
 $('clearLog').addEventListener('click', () => { $('log').innerHTML = ''; });
 
 $('selAll').addEventListener('change', (e) => {
-  document.querySelectorAll('.job-item:not(.skip) input').forEach(c => c.checked = e.target.checked);
+  document.querySelectorAll('.job-item:not(.skip) input:not(:disabled)').forEach(c => c.checked = e.target.checked);
 });
+
+function isBackendRunning(phase, deliveryActive) {
+  return deliveryActive === true || phase === 'collecting' || phase === 'screening' || phase === 'delivering';
+}
+function stopKeepAlive() {
+  keepAliveExpected = false;
+  clearInterval(keepAliveTimer);
+  clearTimeout(keepAliveReconnectTimer);
+  keepAliveTimer = null;
+  keepAliveReconnectTimer = null;
+  if (keepAlivePort) {
+    try { keepAlivePort.disconnect(); } catch (error) {}
+    keepAlivePort = null;
+  }
+  backendActiveSeen = false;
+}
+function startKeepAlive() {
+  keepAliveExpected = true;
+  if (keepAlivePort) return;
+  clearTimeout(keepAliveReconnectTimer);
+  keepAliveReconnectTimer = null;
+  try {
+    const port = chrome.runtime.connect({ name: 'jobcopilot-run-keepalive' });
+    keepAlivePort = port;
+    const ping = () => {
+      if (!keepAliveExpected || keepAlivePort !== port) return;
+      try { port.postMessage({ type: 'PING', at: Date.now() }); } catch (error) {}
+    };
+    port.onMessage.addListener(message => {
+      if (!message || message.type !== 'STATE') return;
+      const active = isBackendRunning(message.phase, message.deliveryActive);
+      if (active) {
+        backendActiveSeen = true;
+        backendLossReported = false;
+        $('btnPause').textContent = message.paused ? '继续' : '暂停';
+      } else if (keepAliveExpected && backendActiveSeen && message.phase === 'idle') {
+        if (!backendLossReported) {
+          addLog('后台任务已中断；已投岗位记录仍保留，可重新确认剩余岗位', 'error');
+          backendLossReported = true;
+        }
+        applyPhase('idle', false);
+      }
+    });
+    port.onDisconnect.addListener(() => {
+      if (keepAlivePort === port) keepAlivePort = null;
+      clearInterval(keepAliveTimer);
+      keepAliveTimer = null;
+      if (keepAliveExpected) {
+        keepAliveReconnectTimer = setTimeout(startKeepAlive, 1000);
+      }
+    });
+    keepAliveTimer = setInterval(ping, 15000);
+    setTimeout(ping, 1500);
+  } catch (error) {
+    keepAliveReconnectTimer = setTimeout(startKeepAlive, 1500);
+  }
+}
 
 function setRunning(running) {
   $('btnCollect').disabled = running;
@@ -302,6 +373,8 @@ function setRunning(running) {
   $('btnStop').disabled = !running;
   $('btnDeliver').disabled = running || deliverySubmitPending;
   if (!running) $('btnPause').textContent = '暂停';
+  if (running) startKeepAlive();
+  else stopKeepAlive();
 }
 function setDeliveryActive(active) {
   $('btnReviewStop').hidden = !active;
@@ -315,10 +388,18 @@ function renderReview(screened) {
   $('reviewCount').textContent = '匹配 ' + matched.length + ' / ' + screened.length;
   let html = '';
   matched.forEach(j => {
-    html += '<div class="job-item"><input type="checkbox" checked data-id="' + esc(j.id) + '">'
+    const processedState = processedJobs[j.id];
+    const processed = Boolean(processedState);
+    const processedLabel = processedState === 'uncertain'
+      ? '⚠ 上次操作结果待确认，已锁定防止重复'
+      : '✓ 已投递，本轮不会重复';
+    html += '<div class="job-item' + (processed ? ' processed' : '') + '"><input type="checkbox" ' +
+      (processed ? 'disabled ' : 'checked ') + 'data-id="' + esc(j.id) + '">'
       + '<div class="job-main"><div class="job-title">' + esc(j.name) + '</div>'
       + renderJobMeta(j)
-      + '<div class="job-reason m">✓ ' + esc(j.reason) + '</div></div></div>';
+      + '<div class="job-reason m">' +
+      (processed ? processedLabel : '✓ ' + esc(j.reason)) +
+      '</div></div></div>';
   });
   skipped.forEach(j => {
     html += '<div class="job-item skip"><input type="checkbox" disabled data-id="' + esc(j.id) + '">'
@@ -357,6 +438,23 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'PROGRESS') $('progText').textContent = (msg.label ? msg.label + ' ' : '') + msg.cur + '/' + msg.total;
   if (msg.type === 'PHASE') applyPhase(msg.phase);
   if (msg.type === 'SCREENED') renderReview(msg.screened);
+  if (msg.type === 'DELIVERY_ITEM' && (msg.ok || msg.status === 'uncertain')) {
+    const status = msg.status === 'uncertain' ? 'uncertain' : 1;
+    processedJobs[msg.id] = status;
+    const input = Array.from(document.querySelectorAll('.job-item input')).find(item => item.dataset.id === msg.id);
+    if (input) {
+      input.checked = false;
+      input.disabled = true;
+      const item = input.closest('.job-item');
+      item.classList.add('processed');
+      const reason = item.querySelector('.job-reason');
+      if (reason) {
+        reason.textContent = status === 'uncertain'
+          ? '⚠ 上次操作结果待确认，已锁定防止重复'
+          : '✓ 已投递，本轮不会重复';
+      }
+    }
+  }
   if (msg.type === 'DONE') { setRunning(false); setDeliveryActive(false); $('progText').textContent = ''; }
 });
 
@@ -364,6 +462,9 @@ sendRuntimeMessage({ type: 'GET_STATE' }).then(current => {
   if (!current) return;
   if (current.screened && current.screened.length) renderReview(current.screened);
   applyPhase(current.phase || 'idle', current.deliveryActive);
+  if (current.paused && isBackendRunning(current.phase, current.deliveryActive)) {
+    $('btnPause').textContent = '继续';
+  }
 }).catch(() => {});
 
 function addLog(text, level) {

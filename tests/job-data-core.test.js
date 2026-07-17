@@ -216,6 +216,7 @@ test('rejects duplicate, processed, or stale delivery selections instead of shri
   const screened = [{ id: 'one', match: true }];
   assert.equal(prepareDeliveryBatch(['one', 'one'], jobs, screened, {}).ok, false);
   assert.equal(prepareDeliveryBatch(['one'], jobs, screened, { one: 1 }).ok, false);
+  assert.equal(prepareDeliveryBatch(['one'], jobs, screened, { one: 'uncertain' }).ok, false);
   assert.equal(prepareDeliveryBatch(['missing'], jobs, [{ id: 'missing', match: true }], {}).ok, false);
 });
 

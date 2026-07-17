@@ -10,7 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Edge%20%7C%20Chrome-brightgreen.svg)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-orange.svg)
 ![AI](https://img.shields.io/badge/AI-GPT--5.6%20via%20MuskAI-purple.svg)
-![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.3.2-blue.svg)
 
 [功能特性](#-功能特性) · [快速开始](#-快速开始) · [工作流程](#-工作流程) · [免责声明](#️-免责声明)
 
@@ -39,6 +39,7 @@
 - ✍️ **千岗千面招呼语**：每个岗位单独生成「熟悉 XXX、做过 XXX」格式招呼语，精准对口
 - ✅ **审核确认机制**：投递前列出岗位名称、公司、薪资、地区和筛选理由，你勾选确认，绝不盲投
 - 🔒 **精确投递保护**：后台严格校验勾选数量与 AI 匹配结果，并阻止重复启动；审核区可随时停止投递
+- 🫀 **标签页后台运行**：侧边栏心跳维持任务，可切换其他标签页；页面操作超时会安全跳过，已投岗位自动锁定
 - 📎 **自动发送简历**：先发简历图片，再发招呼语，一个岗位完整闭环再投下一个
 - 📊 **实时日志面板**：进度、成功/失败一目了然，支持暂停 / 停止 / 重置
 - 🛡️ **拟人化节奏**：随机延迟、逐个投递，自然防风控；已投去重不重复打扰
@@ -92,6 +93,8 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 4. 单个简历文件最大 15 MB。旧版 `.doc` 请先另存为 `.docx`。
 
 然后点击 **开始收集 + AI 筛选** → 在 **审核确认** 区勾选要投的岗位 → **投递选中** → 看着日志自动跑完。
+
+运行期间可以切换到其他 Edge 标签页或其他应用，但必须保持 JobCopilot 侧边栏和 Edge 开启。关闭侧边栏或 Edge 会在当前单步动作结束后停止；重新打开侧边栏时，已成功投递的岗位会显示为“已投递”并禁用，剩余岗位可重新确认后继续。如果建立联系或发送步骤超时，当前岗位会标记为“状态待确认”并锁定，请先到 BOSS 手动核实，插件不会自动重试。为避免对 BOSS 页面造成过多自动操作，不提供浏览器完全关闭后的无人值守投递。
 
 > 升级到 1.1.0 后，旧 AI 配置 `dsKey` 会自动删除；简历、搜索条件和已投记录会保留。请重新填写 MuskAI API Key。
 

@@ -23,7 +23,8 @@ const SCREEN_RESPONSE_FORMAT = {
 
 let state = {
   phase: 'idle', paused: false, aborted: false,
-  jobs: [], screened: [], greetings: {}, results: [], processed: {}
+  jobs: [], screened: [], greetings: {}, results: [], processed: {},
+  lastActivityAt: Date.now()
 };
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -41,9 +42,13 @@ try { chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(
 // ── 小工具 ──
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const rand = (a, b) => sleep(a + Math.random() * (b - a));
-function log(text, level) { chrome.runtime.sendMessage({ type: 'LOG', text: text, level: level || 'info' }).catch(() => {}); }
-function pushPhase() { chrome.runtime.sendMessage({ type: 'PHASE', phase: state.phase }).catch(() => {}); }
-function progress(cur, total, label) { chrome.runtime.sendMessage({ type: 'PROGRESS', cur: cur, total: total, label: label || '' }).catch(() => {}); }
+function touchActivity() { state.lastActivityAt = Date.now(); }
+function isTaskRunning() {
+  return state.phase === 'collecting' || state.phase === 'screening' || state.phase === 'delivering';
+}
+function log(text, level) { touchActivity(); chrome.runtime.sendMessage({ type: 'LOG', text: text, level: level || 'info' }).catch(() => {}); }
+function pushPhase() { touchActivity(); chrome.runtime.sendMessage({ type: 'PHASE', phase: state.phase }).catch(() => {}); }
+function progress(cur, total, label) { touchActivity(); chrome.runtime.sendMessage({ type: 'PROGRESS', cur: cur, total: total, label: label || '' }).catch(() => {}); }
 async function waitIfPaused() { while (state.paused && !state.aborted) await sleep(400); }
 function getCfg() { return chrome.storage.local.get(['muskApiKey', 'gptModel', 'resumeText', 'resumeImage', 'resumeImages', 'city', 'keyword', 'count']); }
 function resumeFull(cfg) { return (cfg.resumeText || '').trim(); }
@@ -175,19 +180,46 @@ async function ensureInjected(tabId, file) {
   files.push(file);
   try { await chrome.scripting.executeScript({ target: { tabId: tabId }, files: files }); } catch (e) {}
 }
-function sendToTab(tabId, msg) {
+function sendToTab(tabId, msg, timeoutMs) {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = response => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      touchActivity();
+      resolve(response);
+    };
+    const timer = setTimeout(() => {
+      finish({
+        success: false,
+        timedOut: true,
+        error: 'BOSS 页面操作超时，请保持侧边栏开启后重试'
+      });
+    }, timeoutMs || 60000);
     chrome.tabs.sendMessage(tabId, msg, (resp) => {
-      if (chrome.runtime.lastError) resolve({ success: false, error: chrome.runtime.lastError.message });
-      else resolve(resp || { success: false, error: 'no response' });
+      if (chrome.runtime.lastError) finish({ success: false, error: chrome.runtime.lastError.message });
+      else finish(resp || { success: false, error: 'no response' });
     });
   });
 }
-function waitTabComplete(tabId) {
+function waitTabComplete(tabId, timeoutMs) {
   return new Promise((resolve) => {
-    function lis(id, info) { if (id === tabId && info.status === 'complete') { chrome.tabs.onUpdated.removeListener(lis); setTimeout(resolve, 1200); } }
+    let settled = false;
+    const finish = loaded => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(lis);
+      setTimeout(() => resolve(loaded), 1200);
+    };
+    function lis(id, info) { if (id === tabId && info.status === 'complete') finish(true); }
+    const timer = setTimeout(() => finish(false), timeoutMs || 30000);
     chrome.tabs.onUpdated.addListener(lis);
-    chrome.tabs.get(tabId, (t) => { if (t && t.status === 'complete') { chrome.tabs.onUpdated.removeListener(lis); setTimeout(resolve, 1200); } });
+    chrome.tabs.get(tabId, (t) => {
+      if (chrome.runtime.lastError) finish(false);
+      else if (t && t.status === 'complete') finish(true);
+    });
   });
 }
 function resolveCities(cfg) {
@@ -250,7 +282,7 @@ async function runCollect() {
     try {
       const tab = await ensureTab(searchUrl);
       await ensureInjected(tab.id, 'src/content-search.js');
-      const r = await sendToTab(tab.id, { type: 'SCRAPE', count: cityTarget });
+      const r = await sendToTab(tab.id, { type: 'SCRAPE', count: cityTarget }, 120000);
       if (!r || !r.success) {
         log(city.name + '收集失败：' + ((r && r.error) || '页面无响应'), 'error');
         continue;
@@ -337,7 +369,9 @@ async function runDeliver(jobIds) {
   if (!ids.length) { log('没有可投递的岗位（可能已投过，可点重置）', 'warn'); finishDeliver(); return; }
   log('后台已锁定本轮投递：仅 ' + ids.length + ' 个已勾选且 AI 匹配的岗位', 'info');
   for (let k = 0; k < ids.length; k++) {
-    if (state.aborted) break; await waitIfPaused(); if (state.aborted) break;
+    if (state.aborted) break;
+    await waitIfPaused();
+    if (state.aborted) break;
     const job = findJob(ids[k]);
     if (!job) { log('[' + (k + 1) + '/' + ids.length + '] 找不到岗位数据，跳过', 'warn'); continue; }
     log('[' + (k + 1) + '/' + ids.length + '] ' + job.name + ' - ' + (job.company || ''));
@@ -347,11 +381,17 @@ async function runDeliver(jobIds) {
     const tab = await ensureTab(searchUrl);
     await ensureInjected(tab.id, 'src/content-search.js');
     log('  读取岗位JD...');
-    const jdr = await sendToTab(tab.id, { type: 'OPEN_JD', job: job });
+    const jdr = await sendToTab(tab.id, { type: 'OPEN_JD', job: job }, 20000);
     if (!jdr || !jdr.success) {
       const error = (jdr && jdr.error) || '岗位卡片校验失败';
       recordFail(job, error); log('  ' + error + '，安全跳过', 'error');
-      progress(k + 1, ids.length, '投递'); continue;
+      progress(k + 1, ids.length, '投递');
+      if (jdr && jdr.timedOut) {
+        state.aborted = true;
+        log('  页面响应异常，本轮已停止，避免后续岗位状态错位', 'error');
+        break;
+      }
+      continue;
     }
     const jd = (jdr && jdr.jd) || '';
     if (state.aborted) break;
@@ -361,36 +401,94 @@ async function runDeliver(jobIds) {
     let greeting = '';
     try { greeting = await genGreetingFromJD(cfg, job, jd); } catch (e) { log('  生成失败：' + e.message, 'error'); }
     if (!greeting) { recordFail(job, '招呼语生成失败'); log('  招呼语为空，跳过', 'warn'); progress(k + 1, ids.length, '投递'); continue; }
-    if (state.aborted) break;
+    if (state.aborted) break; await waitIfPaused(); if (state.aborted) break;
 
     // 3. 点立即沟通 → 继续沟通（跳聊天页）
     log('  建立联系（立即沟通 → 继续沟通）...');
-    const chatStart = await sendToTab(tab.id, { type: 'GO_CHAT', job: job });
+    const chatStart = await sendToTab(tab.id, { type: 'GO_CHAT', job: job }, 30000);
     if (!chatStart || !chatStart.success) {
       const error = (chatStart && chatStart.error) || '建立联系失败';
       recordFail(job, error); log('  ' + error + '，安全跳过', 'error');
-      progress(k + 1, ids.length, '投递'); continue;
+      progress(k + 1, ids.length, '投递');
+      if (chatStart && chatStart.timedOut) {
+        await lockUncertainJob(job);
+        state.aborted = true;
+        log('  当前岗位状态待确认，已锁定并停止本轮，防止重复联系', 'error');
+        break;
+      }
+      continue;
     }
-    await waitTabComplete(tab.id); await sleep(2500);
-    if (state.aborted) break;
+    const chatLoaded = await waitTabComplete(tab.id, 30000); await sleep(2500);
+    if (!chatLoaded) {
+      await lockUncertainJob(job);
+      state.aborted = true;
+      recordFail(job, '聊天页加载超时');
+      log('  聊天页加载超时，当前岗位已锁定并停止本轮，请手动确认', 'error');
+      progress(k + 1, ids.length, '投递');
+      break;
+    }
+    if (state.aborted) {
+      await lockUncertainJob(job);
+      log('  建立联系后任务被停止，当前岗位已锁定，请手动确认', 'warn');
+      break;
+    }
+    await waitIfPaused();
+    if (state.aborted) {
+      await lockUncertainJob(job);
+      log('  建立联系后任务被停止，当前岗位已锁定，请手动确认', 'warn');
+      break;
+    }
 
     // 4. 聊天页当前打开的即该岗位会话，先发图片再发招呼语（无需匹配）
     const u = await curUrl(tab.id);
-    if (u.indexOf('/web/geek/chat') < 0) { recordFail(job, '未跳转聊天页'); log('  未进入聊天页，跳过', 'error'); progress(k + 1, ids.length, '投递'); continue; }
+    if (u.indexOf('/web/geek/chat') < 0) {
+      await lockUncertainJob(job);
+      state.aborted = true;
+      recordFail(job, '未确认跳转聊天页');
+      log('  未确认进入聊天页，当前岗位已锁定并停止本轮，请手动确认', 'error');
+      progress(k + 1, ids.length, '投递');
+      break;
+    }
     await ensureInjected(tab.id, 'src/content-chat.js');
     log(resumeImages.length
       ? '  发 ' + resumeImages.length + ' 张简历图片 + 招呼语...'
       : '  只发招呼语...');
-    const r = await sendToTab(tab.id, { type: 'SEND_ACTIVE', images: resumeImages, greeting: greeting });
-    if (r && r.success) { recordOk(job); state.processed[job.id] = 1; await chrome.storage.local.set({ processed: state.processed }); log('  ✓ 投递成功', 'success'); }
-    else { recordFail(job, (r && r.error) || '发送失败'); log('  失败：' + (r && r.error), 'error'); }
+    const r = await sendToTab(tab.id, { type: 'SEND_ACTIVE', images: resumeImages, greeting: greeting }, 60000);
+    if (r && r.success) {
+      recordOk(job);
+      state.processed[job.id] = 1;
+      await chrome.storage.local.set({ processed: state.processed });
+      chrome.runtime.sendMessage({ type: 'DELIVERY_ITEM', id: job.id, ok: true }).catch(() => {});
+      log('  ✓ 投递成功', 'success');
+    }
+    else {
+      const sendError = (r && r.error) || '发送失败';
+      recordFail(job, sendError);
+      log('  失败：' + sendError, 'error');
+      if (r && (r.timedOut || r.uncertain)) {
+        await lockUncertainJob(job);
+        state.aborted = true;
+        log('  发送结果待确认，当前岗位已锁定并停止本轮，防止重复发送', 'error');
+      }
+    }
     progress(k + 1, ids.length, '投递');
+    if (state.aborted) break;
     await rand(2500, 4500);
   }
   finishDeliver();
 }
 function recordOk(job) { state.results.push({ id: job.id, name: job.name, ok: true }); }
 function recordFail(job, msg) { state.results.push({ id: job.id, name: job.name, ok: false, msg: msg }); }
+async function lockUncertainJob(job) {
+  state.processed[job.id] = 'uncertain';
+  await chrome.storage.local.set({ processed: state.processed });
+  chrome.runtime.sendMessage({
+    type: 'DELIVERY_ITEM',
+    id: job.id,
+    ok: false,
+    status: 'uncertain'
+  }).catch(() => {});
+}
 function finishDeliver() {
   const ok = state.results.filter(r => r.ok).length;
   const fail = state.results.length - ok;
@@ -427,9 +525,45 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'STOP') { state.aborted = true; state.paused = false; log('已停止', 'warn'); state.phase = 'idle'; pushPhase(); sendResponse({ ok: true }); return; }
   if (msg.type === 'RESET') {
     if (deliveryGate.isActive()) { sendResponse({ ok: false, error: '投递任务仍在运行，不能重置' }); return; }
-    state.processed = {}; chrome.storage.local.set({ processed: {} }); state.jobs = []; state.screened = []; state.greetings = {}; state.results = []; state.phase = 'idle'; pushPhase(); log('已重置（清空已投记录）', 'warn'); sendResponse({ ok: true }); return;
+    state.processed = {};
+    chrome.storage.local.set({ processed: {} });
+    chrome.storage.local.remove(['sw_jobs', 'sw_greetings', 'sw_screened']);
+    state.jobs = []; state.screened = []; state.greetings = {}; state.results = []; state.phase = 'idle'; pushPhase(); log('已重置（清空已投记录）', 'warn'); sendResponse({ ok: true }); return;
   }
-  if (msg.type === 'GET_STATE') { sendResponse({ phase: state.phase, screened: state.screened, deliveryActive: deliveryGate.isActive() }); return; }
+  if (msg.type === 'GET_STATE') {
+    touchActivity();
+    sendResponse({
+      phase: state.phase,
+      paused: state.paused,
+      screened: state.screened,
+      deliveryActive: deliveryGate.isActive(),
+      lastActivityAt: state.lastActivityAt
+    });
+    return;
+  }
+});
+
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name !== 'jobcopilot-run-keepalive') return;
+  port.onMessage.addListener(message => {
+    if (!message || message.type !== 'PING') return;
+    touchActivity();
+    try {
+      port.postMessage({
+        type: 'STATE',
+        phase: state.phase,
+        paused: state.paused,
+        deliveryActive: deliveryGate.isActive(),
+        lastActivityAt: state.lastActivityAt
+      });
+    } catch (error) {}
+  });
+  port.onDisconnect.addListener(() => {
+    if (!isTaskRunning()) return;
+    state.aborted = true;
+    state.paused = false;
+    log('侧边栏已关闭，当前动作结束后将安全停止', 'warn');
+  });
 });
 
 chrome.storage.local.get('processed').then(r => { if (r.processed) state.processed = r.processed; });

@@ -144,10 +144,16 @@
     if (!oc.ok) return { success: false, error: oc.err };
     const images = Array.isArray(msg.images) ? msg.images : (msg.image ? [msg.image] : []);
     const imageResult = await sendImages(images);
-    if (!imageResult.ok) return { success: false, error: '投递图片发送失败（已发送 ' + imageResult.sentCount + ' 张）' };
+    if (!imageResult.ok) {
+      return {
+        success: false,
+        uncertain: imageResult.sentCount > 0,
+        error: '投递图片发送失败（已发送 ' + imageResult.sentCount + ' 张）'
+      };
+    }
     await sleep(800);
     const tr = await sendText(msg.greeting);
-    if (!tr.ok) return { success: false, error: tr.err };
+    if (!tr.ok) return { success: false, uncertain: true, error: tr.err };
     return { success: true, imageCount: imageResult.sentCount };
   }
 
@@ -161,10 +167,16 @@
     }
     if (!input) return { success: false, error: '未找到输入框｜' + dumpInputs() };
     const imageResult = await sendImages(images);
-    if (!imageResult.ok) return { success: false, error: '投递图片发送失败（已发送 ' + imageResult.sentCount + ' 张）' };
+    if (!imageResult.ok) {
+      return {
+        success: false,
+        uncertain: imageResult.sentCount > 0,
+        error: '投递图片发送失败（已发送 ' + imageResult.sentCount + ' 张）'
+      };
+    }
     await sleep(800);
     const tr = await sendText(greeting);
-    if (!tr.ok) return { success: false, error: tr.err };
+    if (!tr.ok) return { success: false, uncertain: true, error: tr.err };
     return { success: true, imageCount: imageResult.sentCount };
   }
 
