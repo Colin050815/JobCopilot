@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 const CFG_FIELDS = ['muskApiKey', 'gptModel', 'resumeText', 'keyword', 'city', 'count'];
 const DEFAULT_MODEL = 'gpt-5.6-terra';
 let selectedResumeFile = null;
+let deliverySubmitPending = false;
 
 // 折叠
 document.querySelectorAll('.card-h[data-toggle]').forEach(h => {
@@ -173,19 +174,52 @@ $('btnCollect').addEventListener('click', async () => {
   chrome.runtime.sendMessage({ type: 'START_COLLECT' });
 });
 
-$('btnDeliver').addEventListener('click', () => {
-  const ids = Array.from(document.querySelectorAll('.job-item input:checked')).map(c => c.dataset.id);
+$('btnDeliver').addEventListener('click', async () => {
+  if (deliverySubmitPending) return addLog('投递请求正在确认，请勿重复点击', 'warn');
+  const checked = Array.from(document.querySelectorAll('.job-item:not(.skip) input:checked'));
+  const ids = checked.map(c => c.dataset.id);
   if (!ids.length) return addLog('请至少勾选一个岗位', 'error');
+  if (new Set(ids).size !== ids.length) return addLog('检测到重复岗位 ID，请重新收集后再审核', 'error');
+  const names = checked.map(input => {
+    const title = input.closest('.job-item').querySelector('.job-title');
+    return '• ' + (title ? title.textContent.trim() : input.dataset.id);
+  });
+  if (!confirm('确认只投递以下 ' + ids.length + ' 个 AI 匹配岗位？\n\n' + names.join('\n') + '\n\n确认后才会建立联系。')) return;
+
+  deliverySubmitPending = true;
   setRunning(true);
-  addLog('开始投递 ' + ids.length + ' 个岗位', 'info');
-  chrome.runtime.sendMessage({ type: 'START_DELIVER', jobIds: ids });
+  setDeliveryActive(true);
+  let accepted = false;
+  try {
+    const result = await sendRuntimeMessage({ type: 'START_DELIVER', jobIds: ids });
+    if (!result || !result.ok) throw new Error((result && result.error) || '后台未接受投递任务');
+    if (result.count !== ids.length) {
+      chrome.runtime.sendMessage({ type: 'STOP' });
+      throw new Error('后台确认数量不一致，已发送停止请求');
+    }
+    accepted = true;
+    addLog('后台确认：本轮只投递 ' + result.count + ' 个岗位', 'info');
+  } catch (error) {
+    addLog(error.message || '启动投递失败', 'error');
+    setDeliveryActive(false);
+  } finally {
+    deliverySubmitPending = false;
+    if (!accepted) setRunning(false);
+  }
 });
 
 $('btnPause').addEventListener('click', () => {
   if ($('btnPause').textContent === '暂停') { $('btnPause').textContent = '继续'; chrome.runtime.sendMessage({ type: 'PAUSE' }); }
   else { $('btnPause').textContent = '暂停'; chrome.runtime.sendMessage({ type: 'RESUME' }); }
 });
-$('btnStop').addEventListener('click', () => { chrome.runtime.sendMessage({ type: 'STOP' }); setRunning(false); });
+function stopDelivery() {
+  chrome.runtime.sendMessage({ type: 'STOP' });
+  addLog('已请求停止；当前正在执行的单个动作结束后不会再投下一个岗位', 'warn');
+  setRunning(false);
+  setDeliveryActive(false);
+}
+$('btnStop').addEventListener('click', stopDelivery);
+$('btnReviewStop').addEventListener('click', stopDelivery);
 $('btnReset').addEventListener('click', () => { chrome.runtime.sendMessage({ type: 'RESET' }); $('reviewCard').style.display = 'none'; setRunning(false); });
 $('clearLog').addEventListener('click', () => { $('log').innerHTML = ''; });
 
@@ -197,13 +231,18 @@ function setRunning(running) {
   $('btnCollect').disabled = running;
   $('btnPause').disabled = !running;
   $('btnStop').disabled = !running;
+  $('btnDeliver').disabled = running || deliverySubmitPending;
   if (!running) $('btnPause').textContent = '暂停';
+}
+function setDeliveryActive(active) {
+  $('btnReviewStop').hidden = !active;
+  $('btnDeliver').hidden = active;
 }
 
 // 渲染审核列表
 function renderReview(screened) {
-  const matched = screened.filter(j => j.match);
-  const skipped = screened.filter(j => !j.match);
+  const matched = screened.filter(j => j.match === true);
+  const skipped = screened.filter(j => j.match !== true);
   $('reviewCount').textContent = '匹配 ' + matched.length + ' / ' + screened.length;
   let html = '';
   matched.forEach(j => {
@@ -236,17 +275,27 @@ function renderJobMeta(job) {
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // 消息接收
+function applyPhase(phase, deliveryActive) {
+  const map = { idle: '未开始', collecting: '收集中', screening: 'AI筛选中', review: '待审核', delivering: '投递中', done: '已完成' };
+  $('phaseText').textContent = map[phase] || phase;
+  const isDelivering = deliveryActive === true || phase === 'delivering';
+  setDeliveryActive(isDelivering);
+  setRunning(isDelivering || phase === 'collecting' || phase === 'screening');
+}
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'LOG') addLog(msg.text, msg.level);
   if (msg.type === 'PROGRESS') $('progText').textContent = (msg.label ? msg.label + ' ' : '') + msg.cur + '/' + msg.total;
-  if (msg.type === 'PHASE') {
-    const map = { idle: '未开始', collecting: '收集中', screening: 'AI筛选中', review: '待审核', delivering: '投递中', done: '已完成' };
-    $('phaseText').textContent = map[msg.phase] || msg.phase;
-    if (msg.phase === 'review' || msg.phase === 'done' || msg.phase === 'idle') setRunning(false);
-  }
+  if (msg.type === 'PHASE') applyPhase(msg.phase);
   if (msg.type === 'SCREENED') renderReview(msg.screened);
-  if (msg.type === 'DONE') { setRunning(false); $('progText').textContent = ''; }
+  if (msg.type === 'DONE') { setRunning(false); setDeliveryActive(false); $('progText').textContent = ''; }
 });
+
+sendRuntimeMessage({ type: 'GET_STATE' }).then(current => {
+  if (!current) return;
+  if (current.screened && current.screened.length) renderReview(current.screened);
+  applyPhase(current.phase || 'idle', current.deliveryActive);
+}).catch(() => {});
 
 function addLog(text, level) {
   level = level || 'info';

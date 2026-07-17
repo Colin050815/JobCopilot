@@ -143,6 +143,53 @@
     return merged;
   }
 
+  function prepareDeliveryBatch(requestedIds, jobs, screened, processed) {
+    const normalizedIds = (requestedIds || []).map(cleanText).filter(Boolean);
+    const uniqueIds = Array.from(new Set(normalizedIds));
+    if (!normalizedIds.length) {
+      return { ok: false, error: '没有收到待投递岗位', jobs: [], ids: [] };
+    }
+    if (uniqueIds.length !== normalizedIds.length) {
+      return { ok: false, error: '检测到重复岗位，已阻止投递，请重新审核', jobs: [], ids: uniqueIds };
+    }
+
+    const jobsById = new Map((jobs || []).map(job => [cleanText(job && job.id), job]));
+    const matchedIds = new Set(
+      (screened || [])
+        .filter(job => job && job.match === true)
+        .map(job => cleanText(job.id))
+        .filter(Boolean)
+    );
+    const approved = [];
+    for (const id of uniqueIds) {
+      if (!matchedIds.has(id)) {
+        return { ok: false, error: '所选岗位中包含 AI 未匹配岗位，已阻止本轮投递', jobs: [], ids: uniqueIds };
+      }
+      if (processed && processed[id]) {
+        return { ok: false, error: '所选岗位中包含已投记录，已阻止重复投递', jobs: [], ids: uniqueIds };
+      }
+      const job = jobsById.get(id);
+      if (!job) {
+        return { ok: false, error: '所选岗位与本轮收集数据不一致，已阻止投递', jobs: [], ids: uniqueIds };
+      }
+      approved.push(job);
+    }
+    return { ok: true, error: '', jobs: approved, ids: uniqueIds };
+  }
+
+  function createDeliveryGate() {
+    let active = false;
+    return Object.freeze({
+      tryStart: function () {
+        if (active) return false;
+        active = true;
+        return true;
+      },
+      finish: function () { active = false; },
+      isActive: function () { return active; }
+    });
+  }
+
   return Object.freeze({
     SEARCH_FILTER_KEYS: SEARCH_FILTER_KEYS,
     cleanText: cleanText,
@@ -154,6 +201,8 @@
     extractApiJobs: extractApiJobs,
     buildSearchParams: buildSearchParams,
     mergeJob: mergeJob,
-    mergeJobs: mergeJobs
+    mergeJobs: mergeJobs,
+    prepareDeliveryBatch: prepareDeliveryBatch,
+    createDeliveryGate: createDeliveryGate
   });
 });

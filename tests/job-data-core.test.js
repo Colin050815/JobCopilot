@@ -8,7 +8,9 @@ const {
   parseApiJob,
   extractApiJobs,
   buildSearchParams,
-  mergeJobs
+  mergeJobs,
+  prepareDeliveryBatch,
+  createDeliveryGate
 } = require('../JobCopilot · AI/src/job-data-core.js');
 
 test('detects BOSS private-use salary glyphs and never displays them as boxes', () => {
@@ -106,4 +108,47 @@ test('marks encoded DOM salary unavailable when the BOSS API cannot enrich it', 
   }], [], 1);
   assert.equal(job.salary, '');
   assert.equal(job.salaryUnavailable, true);
+});
+
+test('prepares exactly the unique AI-matched jobs requested by the review UI', () => {
+  const jobs = [
+    { id: 'one', name: '岗位一' },
+    { id: 'two', name: '岗位二' },
+    { id: 'three', name: '岗位三' }
+  ];
+  const screened = jobs.map(job => Object.assign({}, job, { match: true }));
+  const batch = prepareDeliveryBatch(['one', 'three'], jobs, screened, {});
+  assert.equal(batch.ok, true);
+  assert.deepEqual(batch.ids, ['one', 'three']);
+  assert.deepEqual(batch.jobs.map(job => job.id), ['one', 'three']);
+});
+
+test('rejects the whole delivery when a requested job was not matched by AI', () => {
+  const jobs = [{ id: 'matched' }, { id: 'skipped' }];
+  const screened = [
+    { id: 'matched', match: true },
+    { id: 'skipped', match: false }
+  ];
+  const batch = prepareDeliveryBatch(['matched', 'skipped'], jobs, screened, {});
+  assert.equal(batch.ok, false);
+  assert.match(batch.error, /AI 未匹配/);
+  assert.deepEqual(batch.jobs, []);
+});
+
+test('rejects duplicate, processed, or stale delivery selections instead of shrinking silently', () => {
+  const jobs = [{ id: 'one' }];
+  const screened = [{ id: 'one', match: true }];
+  assert.equal(prepareDeliveryBatch(['one', 'one'], jobs, screened, {}).ok, false);
+  assert.equal(prepareDeliveryBatch(['one'], jobs, screened, { one: 1 }).ok, false);
+  assert.equal(prepareDeliveryBatch(['missing'], jobs, [{ id: 'missing', match: true }], {}).ok, false);
+});
+
+test('allows only one active delivery task until the gate is released', () => {
+  const gate = createDeliveryGate();
+  assert.equal(gate.tryStart(), true);
+  assert.equal(gate.isActive(), true);
+  assert.equal(gate.tryStart(), false);
+  gate.finish();
+  assert.equal(gate.isActive(), false);
+  assert.equal(gate.tryStart(), true);
 });

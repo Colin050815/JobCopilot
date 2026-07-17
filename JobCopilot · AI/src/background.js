@@ -1,6 +1,7 @@
 // ===== BOSS自动投递 Service Worker：编排 收集→筛选→审核→投递 + MuskAI GPT-5.6 =====
-importScripts('/src/selectors.js', '/src/muskapi-client.js'); // 让 SW 使用 CITY_MAP 与独立 AI 客户端
+importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
 const aiClient = MuskAIClient.createClient();
+const deliveryGate = JobDataCore.createDeliveryGate();
 const MAX_OCR_IMAGES = 5;
 const MAX_OCR_DATA_LENGTH = 12 * 1024 * 1024;
 const SCREEN_RESPONSE_FORMAT = {
@@ -48,7 +49,6 @@ function getCfg() { return chrome.storage.local.get(['muskApiKey', 'gptModel', '
 function resumeFull(cfg) { return (cfg.resumeText || '').trim(); }
 function jobInfo(j) { return '岗位：' + (j.name || '') + '\n技能标签：' + ((j.tags || []).join('、')) + '\n薪资：' + (j.salary || '') + '\n公司：' + (j.company || '') + '\n地区：' + (j.area || ''); }
 function findJob(id) { for (var i = 0; i < state.jobs.length; i++) if (state.jobs[i].id === id) return state.jobs[i]; return null; }
-
 // ── MuskAI GPT-5.6 ──
 function selectedModel(cfg) {
   return MuskAIClient.normalizeModel(cfg.gptModel);
@@ -255,7 +255,7 @@ async function runCollect() {
       done++; progress(done, total, '筛选');
     }));
   }
-  const matched = state.screened.filter(j => j.match).length;
+  const matched = state.screened.filter(j => j.match === true).length;
   log('筛选完成：匹配 ' + matched + ' / ' + total, 'success');
   // 存盘：SW 可能在审核期间被浏览器回收，投递时需从存储读回
   await chrome.storage.local.set({ sw_jobs: state.jobs, sw_greetings: state.greetings, sw_screened: state.screened });
@@ -263,7 +263,31 @@ async function runCollect() {
   chrome.runtime.sendMessage({ type: 'SCREENED', screened: state.screened }).catch(() => {});
 }
 
-// ── 流程：投递（单个闭环：建联→进聊天页→发图片+招呼语→回搜索页→下一个）──
+// ── 流程：投递（只允许一个任务；后台重新校验精确选择）──
+async function startDelivery(jobIds) {
+  if (!deliveryGate.tryStart()) return { ok: false, error: '已有投递任务正在运行，已阻止重复启动' };
+  try {
+    const stored = await chrome.storage.local.get(['sw_jobs', 'sw_greetings', 'sw_screened', 'processed']);
+    if (!state.jobs.length) state.jobs = stored.sw_jobs || [];
+    if (!state.screened.length) state.screened = stored.sw_screened || [];
+    if (!Object.keys(state.greetings).length) state.greetings = stored.sw_greetings || {};
+    if (stored.processed) state.processed = stored.processed;
+
+    const batch = JobDataCore.prepareDeliveryBatch(jobIds, state.jobs, state.screened, state.processed);
+    if (!batch.ok) {
+      deliveryGate.finish();
+      return { ok: false, error: batch.error };
+    }
+    runDeliver(batch.ids)
+      .catch(error => { log('投递任务异常：' + error.message, 'error'); finishDeliver(); })
+      .finally(() => deliveryGate.finish());
+    return { ok: true, count: batch.ids.length, ids: batch.ids };
+  } catch (error) {
+    deliveryGate.finish();
+    return { ok: false, error: '启动投递失败：' + (error.message || '未知错误') };
+  }
+}
+
 async function runDeliver(jobIds) {
   state.aborted = false; state.paused = false; state.results = [];
   state.phase = 'delivering'; pushPhase();
@@ -274,10 +298,11 @@ async function runDeliver(jobIds) {
 
   const ids = (jobIds || []).filter(id => !state.processed[id]);
   if (!ids.length) { log('没有可投递的岗位（可能已投过，可点重置）', 'warn'); finishDeliver(); return; }
+  log('后台已锁定本轮投递：仅 ' + ids.length + ' 个已勾选且 AI 匹配的岗位', 'info');
   const searchUrl = buildSearchUrl(cfg);
 
   for (let k = 0; k < ids.length; k++) {
-    if (state.aborted) break; await waitIfPaused();
+    if (state.aborted) break; await waitIfPaused(); if (state.aborted) break;
     const job = findJob(ids[k]);
     if (!job) { log('[' + (k + 1) + '/' + ids.length + '] 找不到岗位数据，跳过', 'warn'); continue; }
     log('[' + (k + 1) + '/' + ids.length + '] ' + job.name + ' - ' + (job.company || ''));
@@ -287,18 +312,31 @@ async function runDeliver(jobIds) {
     await ensureInjected(tab.id, 'src/content-search.js');
     log('  读取岗位JD...');
     const jdr = await sendToTab(tab.id, { type: 'OPEN_JD', job: job });
+    if (!jdr || !jdr.success) {
+      const error = (jdr && jdr.error) || '岗位卡片校验失败';
+      recordFail(job, error); log('  ' + error + '，安全跳过', 'error');
+      progress(k + 1, ids.length, '投递'); continue;
+    }
     const jd = (jdr && jdr.jd) || '';
+    if (state.aborted) break;
 
     // 2. 用【完整JD + 简历】现场生成这个岗位专属的招呼语
     log('  AI生成专属招呼语...');
     let greeting = '';
     try { greeting = await genGreetingFromJD(cfg, job, jd); } catch (e) { log('  生成失败：' + e.message, 'error'); }
     if (!greeting) { recordFail(job, '招呼语生成失败'); log('  招呼语为空，跳过', 'warn'); progress(k + 1, ids.length, '投递'); continue; }
+    if (state.aborted) break;
 
     // 3. 点立即沟通 → 继续沟通（跳聊天页）
     log('  建立联系（立即沟通 → 继续沟通）...');
-    await sendToTab(tab.id, { type: 'GO_CHAT', job: job });
+    const chatStart = await sendToTab(tab.id, { type: 'GO_CHAT', job: job });
+    if (!chatStart || !chatStart.success) {
+      const error = (chatStart && chatStart.error) || '建立联系失败';
+      recordFail(job, error); log('  ' + error + '，安全跳过', 'error');
+      progress(k + 1, ids.length, '投递'); continue;
+    }
     await waitTabComplete(tab.id); await sleep(2500);
+    if (state.aborted) break;
 
     // 4. 聊天页当前打开的即该岗位会话，先发图片再发招呼语（无需匹配）
     const u = await curUrl(tab.id);
@@ -318,8 +356,9 @@ function recordFail(job, msg) { state.results.push({ id: job.id, name: job.name,
 function finishDeliver() {
   const ok = state.results.filter(r => r.ok).length;
   const fail = state.results.length - ok;
-  state.phase = 'done'; pushPhase();
-  log('投递完成：成功 ' + ok + ' | 失败 ' + fail, 'success');
+  const stopped = state.aborted;
+  state.phase = stopped ? 'idle' : 'done'; pushPhase();
+  log((stopped ? '投递已停止：' : '投递完成：') + '成功 ' + ok + ' | 失败 ' + fail, stopped ? 'warn' : 'success');
   chrome.runtime.sendMessage({ type: 'DONE', ok: ok, fail: fail }).catch(() => {});
 }
 
@@ -337,13 +376,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(error => sendResponse({ ok: false, error: ocrErrorMessage(error) }));
     return true;
   }
-  if (msg.type === 'START_COLLECT') { runCollect(); sendResponse({ ok: true }); return; }
-  if (msg.type === 'START_DELIVER') { runDeliver(msg.jobIds); sendResponse({ ok: true }); return; }
+  if (msg.type === 'START_COLLECT') {
+    if (deliveryGate.isActive()) { sendResponse({ ok: false, error: '投递任务仍在运行，请先停止' }); return; }
+    runCollect(); sendResponse({ ok: true }); return;
+  }
+  if (msg.type === 'START_DELIVER') {
+    startDelivery(msg.jobIds).then(sendResponse);
+    return true;
+  }
   if (msg.type === 'PAUSE') { state.paused = true; log('已暂停', 'warn'); sendResponse({ ok: true }); return; }
   if (msg.type === 'RESUME') { state.paused = false; log('继续', 'info'); sendResponse({ ok: true }); return; }
   if (msg.type === 'STOP') { state.aborted = true; state.paused = false; log('已停止', 'warn'); state.phase = 'idle'; pushPhase(); sendResponse({ ok: true }); return; }
-  if (msg.type === 'RESET') { state.processed = {}; chrome.storage.local.set({ processed: {} }); state.jobs = []; state.screened = []; state.greetings = {}; state.results = []; state.phase = 'idle'; pushPhase(); log('已重置（清空已投记录）', 'warn'); sendResponse({ ok: true }); return; }
-  if (msg.type === 'GET_STATE') { sendResponse({ phase: state.phase, screened: state.screened }); return; }
+  if (msg.type === 'RESET') {
+    if (deliveryGate.isActive()) { sendResponse({ ok: false, error: '投递任务仍在运行，不能重置' }); return; }
+    state.processed = {}; chrome.storage.local.set({ processed: {} }); state.jobs = []; state.screened = []; state.greetings = {}; state.results = []; state.phase = 'idle'; pushPhase(); log('已重置（清空已投记录）', 'warn'); sendResponse({ ok: true }); return;
+  }
+  if (msg.type === 'GET_STATE') { sendResponse({ phase: state.phase, screened: state.screened, deliveryActive: deliveryGate.isActive() }); return; }
 });
 
 chrome.storage.local.get('processed').then(r => { if (r.processed) state.processed = r.processed; });

@@ -106,7 +106,11 @@
   function findCardByJob(job) {
     const cards = getCards();
     for (const c of cards) { const j = parseCard(c); if (job.id && j.id === job.id) return c; }
-    for (const c of cards) { const j = parseCard(c); if (j.name === job.name && (!job.company || j.company === job.company)) return c; }
+    if (job.id) return null;
+    for (const c of cards) {
+      const j = parseCard(c);
+      if (j.name === job.name && job.company && j.company === job.company) return c;
+    }
     return null;
   }
 
@@ -156,14 +160,22 @@
 
   // 卡片已打开 → 点立即沟通 → 弹窗点"继续沟通"（跳转聊天页）
   async function goChat(job) {
+    const card = findCardByJob(job);
+    if (!card) return { success: false, error: '未找到本轮精确岗位卡片' };
+    const current = parseCard(card);
+    if (!job.id || current.id !== job.id) return { success: false, error: '岗位 ID 校验失败' };
+    card.scrollIntoView({ block: 'center' });
+    await sleep(350);
+    card.click();
+    await sleep(1400);
+
     let btn = await waitFor(SELECTORS.jobs.immediateChatBtn, 5000);
     if (!btn) {
       const all = document.querySelectorAll('a, button, span');
-      for (const el of all) { const tx = (el.textContent || '').trim(); if (tx === '立即沟通' || tx === '继续沟通') { btn = el; break; } }
-    }
-    if (!btn) { // 面板可能关了，重新点卡片
-      const card = findCardByJob(job);
-      if (card) { card.click(); await sleep(1200); btn = await waitFor(SELECTORS.jobs.immediateChatBtn, 4000); }
+      for (const el of all) {
+        const tx = (el.textContent || '').trim();
+        if (tx === '立即沟通' && el.offsetParent !== null) { btn = el; break; }
+      }
     }
     if (!btn) return { success: false, error: '未找到立即沟通按钮' };
     btn.click();

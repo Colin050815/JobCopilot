@@ -1,6 +1,6 @@
 {
   "name": "jobcopilot-extension",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "description": "JobCopilot browser extension tests",
   "scripts": {

@@ -78,7 +78,10 @@
     <div class="card-b">
       <div class="review-tools">
         <label class="mini"><input type="checkbox" id="selAll" checked> 全选匹配</label>
-        <button class="btn-go" id="btnDeliver">投递选中</button>
+        <div class="review-actions">
+          <button class="btn-stop" id="btnReviewStop" hidden>停止投递</button>
+          <button class="btn-go" id="btnDeliver">投递选中</button>
+        </div>
       </div>
       <div id="reviewList"></div>
     </div>

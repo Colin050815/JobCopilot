@@ -47,7 +47,11 @@ input[type=file] { width: 100%; font-size: 12px; }
 .ctrl button:disabled { opacity: .45; cursor: not-allowed; }
 
 .review-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.review-actions { display: flex; align-items: center; gap: 6px; }
 .review-tools .btn-go { width: auto; margin-top: 0; padding: 7px 14px; }
+.btn-stop { padding: 7px 12px; border-radius: 6px; border: 1px solid #d92d20; background: #fff1f0; color: #b42318; cursor: pointer; font-size: 12px; font-weight: 700; }
+.btn-stop:hover { background: #ffe3e0; }
+.btn-go:disabled, .btn-stop:disabled { opacity: .5; cursor: not-allowed; }
 .mini { font-weight: 600; font-size: 12px; }
 #reviewList { margin-top: 10px; max-height: 260px; overflow-y: auto; }
 .job-item { display: flex; gap: 8px; padding: 7px; border-bottom: 1px solid #f0f0f0; align-items: flex-start; }
