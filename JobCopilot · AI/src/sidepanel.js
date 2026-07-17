@@ -1,6 +1,7 @@
 // ===== 侧边栏交互 =====
 const $ = (id) => document.getElementById(id);
-const CFG_FIELDS = ['dsKey', 'resumeText', 'keyword', 'city', 'count'];
+const CFG_FIELDS = ['muskApiKey', 'gptModel', 'resumeText', 'keyword', 'city', 'count'];
+const DEFAULT_MODEL = 'gpt-5.6-terra';
 
 // 折叠
 document.querySelectorAll('.card-h[data-toggle]').forEach(h => {
@@ -13,6 +14,7 @@ document.querySelectorAll('.card-h[data-toggle]').forEach(h => {
 // 载入配置
 chrome.storage.local.get(CFG_FIELDS.concat(['resumeImage']), (d) => {
   CFG_FIELDS.forEach(f => { if (d[f] !== undefined && $(f)) $(f).value = d[f]; });
+  if (!d.gptModel) $('gptModel').value = DEFAULT_MODEL;
   if (d.resumeImage) showImg(d.resumeImage);
 });
 
@@ -25,24 +27,57 @@ $('resumeImg').addEventListener('change', (e) => {
   reader.readAsDataURL(file);
 });
 
-$('saveCfg').addEventListener('click', () => {
+function readFormCfg() {
   const obj = {};
   CFG_FIELDS.forEach(f => { obj[f] = $(f).value.trim ? $(f).value.trim() : $(f).value; });
+  return obj;
+}
+
+$('saveCfg').addEventListener('click', () => {
+  const obj = readFormCfg();
   chrome.storage.local.set(obj, () => { const s = $('saved'); s.style.display = 'inline'; setTimeout(() => s.style.display = 'none', 1500); });
 });
 
 function saveCfgSync() {
   return new Promise(res => {
-    const obj = {};
-    CFG_FIELDS.forEach(f => { obj[f] = $(f).value.trim ? $(f).value.trim() : $(f).value; });
-    chrome.storage.local.set(obj, res);
+    chrome.storage.local.set(readFormCfg(), res);
   });
 }
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, response => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve(response);
+    });
+  });
+}
+
+$('btnTestAI').addEventListener('click', async () => {
+  await saveCfgSync();
+  if (!$('muskApiKey').value.trim()) return addLog('请先填写 MuskAI API Key', 'error');
+
+  const button = $('btnTestAI');
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = '测试中…';
+  addLog('正在测试 MuskAI ' + $('gptModel').value + ' 连接…', 'info');
+  try {
+    const result = await sendRuntimeMessage({ type: 'TEST_AI' });
+    if (!result || !result.ok) throw new Error((result && result.error) || '连接测试失败');
+    addLog('AI 连接成功：' + result.model, 'success');
+  } catch (error) {
+    addLog(error.message || 'AI 连接测试失败', 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+});
 
 // 运行控制
 $('btnCollect').addEventListener('click', async () => {
   await saveCfgSync();
-  if (!$('dsKey').value.trim()) return addLog('请先填 DeepSeek API Key', 'error');
+  if (!$('muskApiKey').value.trim()) return addLog('请先填 MuskAI API Key', 'error');
   if (!$('keyword').value.trim()) return addLog('请先填岗位关键词', 'error');
   $('reviewCard').style.display = 'none';
   setRunning(true);

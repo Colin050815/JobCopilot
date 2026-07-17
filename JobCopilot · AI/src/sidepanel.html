@@ -12,8 +12,16 @@
   <section class="card">
     <div class="card-h" data-toggle="cfgBody"><span>① 配置</span><span class="chev">▾</span></div>
     <div class="card-b" id="cfgBody">
-      <label>DeepSeek API Key</label>
-      <input type="password" id="dsKey" placeholder="sk- 开头">
+      <label>MuskAI API Key</label>
+      <input type="password" id="muskApiKey" placeholder="在 MuskAI 控制台复制 API Key" autocomplete="off">
+
+      <label>GPT-5.6 模型</label>
+      <select id="gptModel">
+        <option value="gpt-5.6-sol">GPT-5.6 Sol（能力优先）</option>
+        <option value="gpt-5.6-terra" selected>GPT-5.6 Terra（默认均衡）</option>
+        <option value="gpt-5.6-luna">GPT-5.6 Luna（速度优先）</option>
+      </select>
+      <div class="privacy-note">Key 仅保存在本机；AI 筛选会把简历文字和岗位信息发送至 MuskAI。</div>
 
       <label>简历图片（投递时发给HR）</label>
       <input type="file" id="resumeImg" accept="image/*">
@@ -31,7 +39,10 @@
       <label>收集岗位数量</label>
       <input type="number" id="count" value="20" min="1" max="200">
 
-      <button class="btn-primary" id="saveCfg">保存配置</button>
+      <div class="cfg-actions">
+        <button class="btn-primary" id="saveCfg">保存配置</button>
+        <button class="btn-secondary" id="btnTestAI">测试 AI 连接</button>
+      </div>
       <span id="saved" class="ok-msg" style="display:none">✓ 已保存</span>
     </div>
   </section>

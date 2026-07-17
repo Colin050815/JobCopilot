@@ -18,11 +18,17 @@ input[type=file] { width: 100%; font-size: 12px; }
 #imgPrev img { max-width: 100%; max-height: 70px; margin-top: 5px; border-radius: 4px; border: 1px solid #ddd; }
 .row { display: flex; gap: 8px; }
 .col { flex: 1; }
+.privacy-note { color: #777; font-size: 11.5px; line-height: 1.5; margin-top: 5px; }
+.cfg-actions { display: flex; gap: 8px; }
 
-.btn-primary, .btn-go { width: 100%; padding: 9px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700; margin-top: 10px; }
+.btn-primary, .btn-secondary, .btn-go { width: 100%; padding: 9px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700; margin-top: 10px; }
 .btn-primary { background: #00a0e9; color: #fff; }
+.btn-secondary { background: #fff; color: #0077ad; border: 1px solid #00a0e9; }
 .btn-go { background: #e8830c; color: #fff; }
+.btn-primary, .btn-go { border: none; }
 .btn-primary:hover { background: #008fd0; } .btn-go:hover { background: #cf7400; }
+.btn-secondary:hover { background: #eef9fe; }
+.btn-primary:disabled, .btn-secondary:disabled { opacity: .55; cursor: not-allowed; }
 .ok-msg { color: #27ae60; font-size: 12px; margin-left: 8px; }
 
 .status-row { display: flex; justify-content: space-between; margin-top: 10px; font-weight: 600; }

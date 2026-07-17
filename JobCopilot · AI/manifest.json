@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "JobCopilot · AI求职智能体",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "基于 LLM 的智能求职助手：AI 岗位匹配 + 千岗千面招呼语 + 自动投递",
   "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "action": { "default_title": "BOSS自动投递" },
   "side_panel": { "default_path": "src/sidepanel.html" },
   "permissions": ["storage", "tabs", "scripting", "sidePanel"],
-  "host_permissions": ["*://*.zhipin.com/*", "https://api.deepseek.com/*"],
+  "host_permissions": ["*://*.zhipin.com/*", "https://api.muskapi.cc/*"],
   "background": { "service_worker": "src/background.js" },
   "content_scripts": [
     {
