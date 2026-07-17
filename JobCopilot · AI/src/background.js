@@ -45,7 +45,7 @@ function log(text, level) { chrome.runtime.sendMessage({ type: 'LOG', text: text
 function pushPhase() { chrome.runtime.sendMessage({ type: 'PHASE', phase: state.phase }).catch(() => {}); }
 function progress(cur, total, label) { chrome.runtime.sendMessage({ type: 'PROGRESS', cur: cur, total: total, label: label || '' }).catch(() => {}); }
 async function waitIfPaused() { while (state.paused && !state.aborted) await sleep(400); }
-function getCfg() { return chrome.storage.local.get(['muskApiKey', 'gptModel', 'resumeText', 'resumeImage', 'city', 'keyword', 'count']); }
+function getCfg() { return chrome.storage.local.get(['muskApiKey', 'gptModel', 'resumeText', 'resumeImage', 'resumeImages', 'city', 'keyword', 'count']); }
 function resumeFull(cfg) { return (cfg.resumeText || '').trim(); }
 function jobInfo(j) { return '岗位：' + (j.name || '') + '\n技能标签：' + ((j.tags || []).join('、')) + '\n薪资：' + (j.salary || '') + '\n公司：' + (j.company || '') + '\n地区：' + (j.area || ''); }
 function findJob(id) { for (var i = 0; i < state.jobs.length; i++) if (state.jobs[i].id === id) return state.jobs[i]; return null; }
@@ -294,7 +294,10 @@ async function runDeliver(jobIds) {
   // SW 可能在审核期间被回收，内存丢了就从存储读回
   if (!state.jobs.length) { const d = await chrome.storage.local.get(['sw_jobs', 'sw_greetings']); state.jobs = d.sw_jobs || []; state.greetings = d.sw_greetings || {}; }
   const cfg = await getCfg();
-  if (!cfg.resumeImage) log('未上传简历图片，将只发招呼语', 'warn');
+  const resumeImages = Array.isArray(cfg.resumeImages) && cfg.resumeImages.length
+    ? cfg.resumeImages
+    : (cfg.resumeImage ? [cfg.resumeImage] : []);
+  if (!resumeImages.length) log('未准备投递图片，将只发招呼语', 'warn');
 
   const ids = (jobIds || []).filter(id => !state.processed[id]);
   if (!ids.length) { log('没有可投递的岗位（可能已投过，可点重置）', 'warn'); finishDeliver(); return; }
@@ -342,8 +345,10 @@ async function runDeliver(jobIds) {
     const u = await curUrl(tab.id);
     if (u.indexOf('/web/geek/chat') < 0) { recordFail(job, '未跳转聊天页'); log('  未进入聊天页，跳过', 'error'); progress(k + 1, ids.length, '投递'); continue; }
     await ensureInjected(tab.id, 'src/content-chat.js');
-    log('  发简历图片 + 招呼语...');
-    const r = await sendToTab(tab.id, { type: 'SEND_ACTIVE', image: cfg.resumeImage || '', greeting: greeting });
+    log(resumeImages.length
+      ? '  发 ' + resumeImages.length + ' 张简历图片 + 招呼语...'
+      : '  只发招呼语...');
+    const r = await sendToTab(tab.id, { type: 'SEND_ACTIVE', images: resumeImages, greeting: greeting });
     if (r && r.success) { recordOk(job); state.processed[job.id] = 1; await chrome.storage.local.set({ processed: state.processed }); log('  ✓ 投递成功', 'success'); }
     else { recordFail(job, (r && r.error) || '发送失败'); log('  失败：' + (r && r.error), 'error'); }
     progress(k + 1, ids.length, '投递');

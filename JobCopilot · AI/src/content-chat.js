@@ -40,11 +40,14 @@
 
   function dataURLtoFile(dataUrl, name) {
     const parts = dataUrl.split(',');
-    const mime = parts[0].match(/:(.*?);/)[1];
+    const mimeMatch = parts[0].match(/:(.*?);/);
+    if (!mimeMatch || !parts[1]) throw new Error('投递图片数据无效');
+    const mime = mimeMatch[1];
     const bin = atob(parts[1]);
     const arr = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    return new File([arr], name || 'resume.png', { type: mime });
+    const extension = mime === 'image/jpeg' ? 'jpg' : (mime.split('/')[1] || 'png');
+    return new File([arr], (name || 'resume') + '.' + extension, { type: mime });
   }
 
   async function openConversation(company, hrName, position) {
@@ -67,11 +70,11 @@
     return { ok: true };
   }
 
-  async function sendImage(image) {
+  async function sendImage(image, index) {
     if (!image) return true;
     const input = findVisible(IMG_SELS) || document.querySelector('input[type=file]');
     if (!input) return false;
-    const file = dataURLtoFile(image, 'resume.png');
+    const file = dataURLtoFile(image, 'resume-page-' + (index + 1));
     const dt = new DataTransfer();
     dt.items.add(file);
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'files').set;
@@ -79,6 +82,18 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
     await sleep(2500);
     return true;
+  }
+
+  async function sendImages(images) {
+    const list = (images || []).filter(Boolean);
+    let sentCount = 0;
+    for (let index = 0; index < list.length; index++) {
+      const ok = await sendImage(list[index], index);
+      if (!ok) return { ok: false, sentCount: sentCount };
+      sentCount++;
+      if (index < list.length - 1) await sleep(700);
+    }
+    return { ok: true, sentCount: sentCount };
   }
 
   function inputText(el) { return (el.isContentEditable || el.getAttribute('contenteditable') === 'true') ? (el.textContent || '') : (el.value || ''); }
@@ -127,15 +142,17 @@
   async function doSend(msg) {
     const oc = await openConversation(msg.company, msg.hrName, msg.position);
     if (!oc.ok) return { success: false, error: oc.err };
-    const imgOk = await sendImage(msg.image);
+    const images = Array.isArray(msg.images) ? msg.images : (msg.image ? [msg.image] : []);
+    const imageResult = await sendImages(images);
+    if (!imageResult.ok) return { success: false, error: '投递图片发送失败（已发送 ' + imageResult.sentCount + ' 张）' };
     await sleep(800);
     const tr = await sendText(msg.greeting);
     if (!tr.ok) return { success: false, error: tr.err };
-    return { success: true, imageOk: imgOk };
+    return { success: true, imageCount: imageResult.sentCount };
   }
 
   // 发给当前已打开的会话（点继续沟通后跳进来的就是目标岗位，无需匹配）
-  async function sendActive(image, greeting) {
+  async function sendActive(images, greeting) {
     let input = await waitVisible(INPUT_SELS, 6000);
     if (!input) {
       const items = document.querySelectorAll(SELECTORS.chat.userList);
@@ -143,11 +160,12 @@
       input = await waitVisible(INPUT_SELS, 6000);
     }
     if (!input) return { success: false, error: '未找到输入框｜' + dumpInputs() };
-    const imgOk = await sendImage(image);
+    const imageResult = await sendImages(images);
+    if (!imageResult.ok) return { success: false, error: '投递图片发送失败（已发送 ' + imageResult.sentCount + ' 张）' };
     await sleep(800);
     const tr = await sendText(greeting);
     if (!tr.ok) return { success: false, error: tr.err };
-    return { success: true, imageOk: imgOk };
+    return { success: true, imageCount: imageResult.sentCount };
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -156,7 +174,8 @@
       return true;
     }
     if (msg.type === 'SEND_ACTIVE') {
-      sendActive(msg.image, msg.greeting).then(r => sendResponse(r)).catch(e => sendResponse({ success: false, error: e.message }));
+      const images = Array.isArray(msg.images) ? msg.images : (msg.image ? [msg.image] : []);
+      sendActive(images, msg.greeting).then(r => sendResponse(r)).catch(e => sendResponse({ success: false, error: e.message }));
       return true;
     }
   });

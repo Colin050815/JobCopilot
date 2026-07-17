@@ -14,18 +14,64 @@ document.querySelectorAll('.card-h[data-toggle]').forEach(h => {
 });
 
 // 载入配置
-chrome.storage.local.get(CFG_FIELDS.concat(['resumeImage']), (d) => {
+chrome.storage.local.get(CFG_FIELDS.concat(['resumeImage', 'resumeImages']), (d) => {
   CFG_FIELDS.forEach(f => { if (d[f] !== undefined && $(f)) $(f).value = d[f]; });
   if (!d.gptModel) $('gptModel').value = DEFAULT_MODEL;
-  if (d.resumeImage) showImg(d.resumeImage);
+  const images = Array.isArray(d.resumeImages) && d.resumeImages.length
+    ? d.resumeImages
+    : (d.resumeImage ? [d.resumeImage] : []);
+  if (images.length) showImages(images);
 });
 
-function showImg(dataUrl) { $('imgPrev').innerHTML = '<img src="' + dataUrl + '">'; }
+function showImages(images) {
+  const preview = $('imgPrev');
+  preview.innerHTML = '';
+  (images || []).forEach((dataUrl, index) => {
+    const item = document.createElement('div');
+    item.className = 'resume-preview';
+    const image = document.createElement('img');
+    image.src = dataUrl;
+    image.alt = '简历第 ' + (index + 1) + ' 页';
+    const badge = document.createElement('span');
+    badge.textContent = '第 ' + (index + 1) + ' 页';
+    item.appendChild(image);
+    item.appendChild(badge);
+    preview.appendChild(item);
+  });
+  if (images && images.length) {
+    const summary = document.createElement('div');
+    summary.className = 'resume-image-summary';
+    summary.textContent = '已准备 ' + images.length + ' 张投递图片，将按页依次发送。';
+    preview.appendChild(summary);
+  }
+}
+
+function saveResumeImages(images, sourceName) {
+  return new Promise((resolve, reject) => {
+    const normalized = (images || []).filter(item => typeof item === 'string' && item.startsWith('data:image/'));
+    chrome.storage.local.set({
+      resumeImages: normalized,
+      resumeImage: normalized[0] || '',
+      resumeImageSource: sourceName || ''
+    }, () => {
+      if (chrome.runtime.lastError) reject(new Error('投递图片保存失败：' + chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+}
 
 $('resumeImg').addEventListener('change', (e) => {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
-  reader.onload = (ev) => { showImg(ev.target.result); chrome.storage.local.set({ resumeImage: ev.target.result }); };
+  reader.onload = async (ev) => {
+    try {
+      await saveResumeImages([ev.target.result], file.name);
+      showImages([ev.target.result]);
+      addLog('已保存手动上传的投递图片', 'success');
+    } catch (error) {
+      addLog(error.message || '投递图片保存失败', 'error');
+    }
+  };
   reader.readAsDataURL(file);
 });
 
@@ -51,7 +97,7 @@ $('resumeFile').addEventListener('change', (event) => {
   selectedResumeFile = event.target.files[0] || null;
   $('btnOcrResume').hidden = true;
   if (!selectedResumeFile) {
-    setParseStatus('PDF、DOCX、TXT、MD 在本机解析；扫描 PDF/图片需单独确认后发送 MuskAI。');
+    setParseStatus('可在本机解析文字或生成投递图片；只有 OCR 会把扫描件发送 MuskAI。');
     return;
   }
   const kind = globalThis.ResumeParserCore
@@ -59,9 +105,9 @@ $('resumeFile').addEventListener('change', (event) => {
     : '';
   if (kind === 'image') {
     $('btnOcrResume').hidden = false;
-    setParseStatus('图片不会自动上传。点击“使用 MuskAI OCR”并确认后才会发送识别。', 'warn');
+    setParseStatus('可直接生成投递图片；如需提取文字，再确认使用 MuskAI OCR。', 'warn');
   } else {
-    setParseStatus('已选择 ' + selectedResumeFile.name + '，点击“本地解析到文本框”。');
+    setParseStatus('已选择 ' + selectedResumeFile.name + '，可解析文字或在本机生成投递图片。');
   }
 });
 
@@ -87,6 +133,29 @@ $('btnParseResume').addEventListener('click', async () => {
   } catch (error) {
     setParseStatus(error.message || '简历解析失败', 'error');
     addLog(error.message || '简历解析失败', 'error');
+  } finally {
+    setButtonBusy(button, false);
+  }
+});
+
+$('btnGenerateResumeImages').addEventListener('click', async () => {
+  if (!selectedResumeFile) return setParseStatus('请先选择简历文件', 'error');
+  if (!globalThis.resumeParser) return setParseStatus('解析组件尚未就绪，请稍候或重新加载扩展', 'error');
+
+  const button = $('btnGenerateResumeImages');
+  setButtonBusy(button, true, '生成中…');
+  try {
+    setParseStatus('正在本机生成投递图片，不会上传文件…', 'warn');
+    const images = await globalThis.resumeParser.prepareDeliveryImages(selectedResumeFile);
+    await saveResumeImages(images, selectedResumeFile.name);
+    showImages(images);
+    const kind = globalThis.ResumeParserCore.fileKind(selectedResumeFile);
+    const layoutNote = kind === 'docx' || kind === 'text' ? '（已按清晰模板重新排版）' : '（保留原页面）';
+    setParseStatus('生成成功：' + images.length + ' 张投递图片' + layoutNote + '，投递时会按页依次发送。', 'success');
+    addLog('已在本机生成 ' + images.length + ' 张投递图片：' + selectedResumeFile.name, 'success');
+  } catch (error) {
+    setParseStatus(error.message || '投递图片生成失败', 'error');
+    addLog(error.message || '投递图片生成失败', 'error');
   } finally {
     setButtonBusy(button, false);
   }

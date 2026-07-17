@@ -10,7 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Edge%20%7C%20Chrome-brightgreen.svg)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-orange.svg)
 ![AI](https://img.shields.io/badge/AI-GPT--5.6%20via%20MuskAI-purple.svg)
-![Version](https://img.shields.io/badge/version-1.2.2-blue.svg)
+![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)
 
 [功能特性](#-功能特性) · [快速开始](#-快速开始) · [工作流程](#-工作流程) · [免责声明](#️-免责声明)
 
@@ -34,6 +34,7 @@
 - 🤖 **AI 智能筛选**：GPT-5.6 结合你的简历，自动剔除不匹配/超纲岗位，只投够得着的
 - 🧠 **三档模型可选**：支持 GPT-5.6 Sol、Terra、Luna，默认使用均衡的 Terra
 - 📄 **简历文件解析**：PDF、DOCX、TXT、MD 在浏览器本地提取文字；扫描 PDF/图片可在确认后使用 MuskAI OCR
+- 🖼️ **简历生成图片**：PDF 按原页转图，图片保留原样，DOCX/TXT/MD 按清晰模板排版；多页按顺序发送
 - ✍️ **千岗千面招呼语**：每个岗位单独生成「熟悉 XXX、做过 XXX」格式招呼语，精准对口
 - ✅ **审核确认机制**：投递前列出岗位名称、公司、薪资、地区和筛选理由，你勾选确认，绝不盲投
 - 🔒 **精确投递保护**：后台严格校验勾选数量与 AI 匹配结果，并阻止重复启动；审核区可随时停止投递
@@ -69,8 +70,8 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 |--------|------|
 | MuskAI API Key | 前往 [MuskAI](https://api.muskapi.cc/) 获取，用于 AI 筛选和生成招呼语 |
 | GPT-5.6 模型 | `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna`，默认 Terra |
-| 简历文件 | 支持 PDF、DOCX、TXT、MD、JPG、PNG、WebP；本地解析后自动填入简历文字 |
-| 简历图片 | 投递时发给 HR 的简历截图 |
+| 简历文件 | 支持 PDF、DOCX、TXT、MD、JPG、PNG、WebP；可本地解析文字或生成投递图片 |
+| 投递图片 | 可由简历文件在本机生成，也可手动上传；多张图片会按页发送给 HR |
 | 简历文字 | 用于 AI 岗位筛选和生成更精准的招呼语 |
 | 关键词 / 城市 | 岗位搜索条件 |
 | 收集数量 | 每次抓取的岗位数 |
@@ -79,8 +80,9 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 先点击 **测试 AI 连接**，确认 Key、端点和所选模型可用。上传简历文件后：
 
 1. PDF、DOCX、TXT、MD：点击 **本地解析到文本框**，检查提取结果后保存。
-2. 扫描 PDF 或图片：本地检测后会出现 **使用 MuskAI OCR**；只有点击该按钮并在确认框中同意，页面才会发送 MuskAI。此能力取决于中转站和所选模型是否支持图片输入；若提示不支持，请改用可提取文字的 PDF、DOCX 或 TXT。
-3. 扫描 PDF 最多 5 页，单个简历文件最大 15 MB。旧版 `.doc` 请先另存为 `.docx`。
+2. 点击 **生成投递图片**：PDF 保留原页面；图片保留原样；DOCX、TXT、MD 按统一清晰模板重新排版。最多生成 5 张，并在下方预览。
+3. 扫描 PDF 或图片：如需提取其中的文字，再点击 **使用 MuskAI OCR** 并确认。只有 OCR 会把扫描件发送 MuskAI。
+4. 单个简历文件最大 15 MB。旧版 `.doc` 请先另存为 `.docx`。
 
 然后点击 **开始收集 + AI 筛选** → 在 **审核确认** 区勾选要投的岗位 → **投递选中** → 看着日志自动跑完。
 
@@ -114,7 +116,7 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 
 - **浏览器扩展**：Manifest V3，原生 JavaScript，无框架
 - **AI 模型**：通过 MuskAI Chat Completions 使用 GPT-5.6 Sol / Terra / Luna
-- **本地简历解析**：PDF.js 解析 PDF，Mammoth.js 解析 DOCX，浏览器原生读取 TXT / MD
+- **本地简历处理**：PDF.js 解析并渲染 PDF，Mammoth.js 解析 DOCX，Canvas 将文字简历排版成投递图片
 - **岗位字段提取**：优先读取 BOSS 同源岗位接口中的明文薪资、公司和地区，接口不可用时回退到页面字段
 - **架构**：Service Worker 编排 + Content Scripts 操作页面 + 侧边栏 UI
 
@@ -124,7 +126,7 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 src/
 ├── background.js      # 核心编排：收集→筛选→投递 + MuskAI 调用
 ├── muskapi-client.js  # 固定端点、重试、错误映射与 JSON 回退
-├── resume-parser-*    # 本地 PDF / DOCX / TXT 解析与扫描件渲染
+├── resume-parser-*    # 本地解析简历并生成多页投递图片
 ├── content-search.js  # 搜索页：抓取岗位 + 建立联系
 ├── content-chat.js    # 聊天页：发送简历图片 + 招呼语
 ├── selectors.js       # DOM 选择器与城市编码
@@ -134,7 +136,8 @@ src/
 ## 🔐 隐私说明
 
 - MuskAI API Key、简历、搜索条件和已投记录保存在浏览器的 `chrome.storage.local`，不会写入代码、Git 或 PR。
-- PDF、DOCX、TXT、MD 的文字提取在浏览器本机完成，所选原始文件不会被保存。
+- PDF、DOCX、TXT、MD 的文字提取和投递图片生成都在浏览器本机完成，所选原始文件不会被保存。
+- 生成的投递图片保存在 `chrome.storage.local`，只有确认投递后才会按页发送给对应 HR。
 - 图片和扫描 PDF 不会自动上传；只有点击 **使用 MuskAI OCR** 并确认后，最多 5 页的渲染图片才会发送 MuskAI。
 - AI 筛选会把**简历文字和岗位信息**发送到 MuskAI；生成招呼语时还会发送岗位 JD。请在使用前确认你接受该第三方中转处理这些内容。
 - 简历图片只在你确认投递后发送给对应 HR，不会作为 MuskAI 请求内容。

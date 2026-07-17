@@ -35,6 +35,30 @@ function fakePdfDocument(pageItems) {
   };
 }
 
+function fakeCanvasDocument(drawnText) {
+  let canvasCount = 0;
+  return {
+    createElement: () => {
+      const id = ++canvasCount;
+      const context = {
+        fillStyle: '',
+        font: '',
+        textAlign: 'left',
+        fillRect: () => {},
+        drawImage: () => {},
+        measureText: text => ({ width: String(text).length * 18 }),
+        fillText: text => drawnText.push(String(text))
+      };
+      return {
+        width: 0,
+        height: 0,
+        getContext: () => context,
+        toDataURL: () => 'data:image/jpeg;base64,cGFnZS0' + id
+      };
+    }
+  };
+}
+
 test('normalizes locally extracted resume text', () => {
   assert.equal(
     cleanExtractedText('\uFEFF姓名  张三  \r\n\r\n\r\n技能：JavaScript\u0000  \n'),
@@ -181,6 +205,45 @@ test('limits scanned PDF OCR to five pages', async () => {
     error => error.code === 'too_many_pages' && /最多支持 5 页/.test(error.message)
   );
   assert.equal(pdf.wasDestroyed(), true);
+});
+
+test('renders every PDF resume page locally as delivery images', async () => {
+  const pdf = fakePdfDocument([[], []]);
+  const parser = createParser({
+    pdfjsLib: { getDocument: () => ({ promise: Promise.resolve(pdf) }) },
+    documentRef: fakeCanvasDocument([])
+  });
+  const images = await parser.prepareDeliveryImages(
+    fakeFile('resume.pdf', 'pdf', 'application/pdf')
+  );
+  assert.equal(images.length, 2);
+  assert.ok(images.every(image => image.startsWith('data:image/jpeg;base64,')));
+  assert.equal(pdf.wasDestroyed(), true);
+});
+
+test('lays out TXT and DOCX resume text into local A4-style delivery images', async () => {
+  const drawnText = [];
+  const parser = createParser({
+    documentRef: fakeCanvasDocument(drawnText),
+    mammoth: {
+      extractRawText: async () => ({
+        value: '张三\n教育经历\n某大学 软件工程\n项目经历\n开发 JobCopilot 浏览器扩展',
+        messages: []
+      })
+    }
+  });
+  const textImages = await parser.prepareDeliveryImages(
+    fakeFile('resume.txt', '张三\n专业技能\nJavaScript TypeScript', 'text/plain')
+  );
+  const docxImages = await parser.prepareDeliveryImages(
+    fakeFile('resume.docx', 'fake docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+  );
+  assert.equal(textImages.length, 1);
+  assert.equal(docxImages.length, 1);
+  assert.ok(drawnText.some(text => text.includes('张三')));
+  assert.ok(drawnText.some(text => text.includes('JobCopilot')));
+  assert.ok(drawnText.some(text => text.includes('JavaScript TypeScript')));
+  assert.ok(drawnText.some(text => text.includes('第 1 页')));
 });
 
 test('rejects unsupported and oversized files before parsing', async () => {
