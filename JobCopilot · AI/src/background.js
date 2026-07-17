@@ -46,7 +46,7 @@ function progress(cur, total, label) { chrome.runtime.sendMessage({ type: 'PROGR
 async function waitIfPaused() { while (state.paused && !state.aborted) await sleep(400); }
 function getCfg() { return chrome.storage.local.get(['muskApiKey', 'gptModel', 'resumeText', 'resumeImage', 'city', 'keyword', 'count']); }
 function resumeFull(cfg) { return (cfg.resumeText || '').trim(); }
-function jobInfo(j) { return '岗位：' + (j.name || '') + '\n技能标签：' + ((j.tags || []).join('、')) + '\n薪资：' + (j.salary || '') + '\n公司：' + (j.company || ''); }
+function jobInfo(j) { return '岗位：' + (j.name || '') + '\n技能标签：' + ((j.tags || []).join('、')) + '\n薪资：' + (j.salary || '') + '\n公司：' + (j.company || '') + '\n地区：' + (j.area || ''); }
 function findJob(id) { for (var i = 0; i < state.jobs.length; i++) if (state.jobs[i].id === id) return state.jobs[i]; return null; }
 
 // ── MuskAI GPT-5.6 ──
@@ -170,7 +170,10 @@ function ocrErrorMessage(error) {
 
 // ── tab 注入 + 发消息 ──
 async function ensureInjected(tabId, file) {
-  try { await chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['src/selectors.js', file] }); } catch (e) {}
+  const files = ['src/selectors.js'];
+  if (file === 'src/content-search.js') files.push('src/job-data-core.js');
+  files.push(file);
+  try { await chrome.scripting.executeScript({ target: { tabId: tabId }, files: files }); } catch (e) {}
 }
 function sendToTab(tabId, msg) {
   return new Promise((resolve) => {
@@ -230,6 +233,7 @@ async function runCollect() {
   await ensureInjected(tab.id, 'src/content-search.js');
   const r = await sendToTab(tab.id, { type: 'SCRAPE', count: count });
   if (!r || !r.success) { log('收集失败：' + (r && r.error), 'error'); state.phase = 'idle'; pushPhase(); return; }
+  if (r.warning) log(r.warning, 'warn');
   state.jobs = r.jobs || [];
   log('收集到 ' + state.jobs.length + ' 个岗位', 'success');
   if (!state.jobs.length) { state.phase = 'idle'; pushPhase(); return; }

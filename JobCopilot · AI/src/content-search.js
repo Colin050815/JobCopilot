@@ -4,28 +4,78 @@
   window.__bossToudiSearch = true;
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const jobData = globalThis.JobDataCore;
 
   function getCards() { return Array.from(document.querySelectorAll(SELECTORS.jobs.jobCard)); }
+
+  function readElementText(element, attributes) {
+    if (!element) return '';
+    for (const attribute of attributes || []) {
+      const value = element.getAttribute && element.getAttribute(attribute);
+      if (value && String(value).trim()) return String(value).trim();
+    }
+    return (element.innerText || element.textContent || '').trim();
+  }
 
   function parseCard(card) {
     const nameEl = card.querySelector(SELECTORS.jobs.jobName);
     const salEl = card.querySelector(SELECTORS.jobs.jobSalary);
+    const compEl = card.querySelector(SELECTORS.jobs.company);
+    const areaEl = card.querySelector(SELECTORS.jobs.area);
     const linkEl = card.querySelector('a[href*="/job_detail/"]') || card.querySelector('a[ka][href]') || card.querySelector('a');
     const link = linkEl ? linkEl.href : '';
     const m = link.match(/job_detail\/([^.?]+)\.html/);
     const id = (m && m[1]) || ((nameEl ? nameEl.textContent.trim() : '') + '|' + (salEl ? salEl.textContent.trim() : ''));
     const tags = Array.from(card.querySelectorAll(SELECTORS.jobs.tagList)).map(t => t.textContent.trim()).filter(Boolean);
-    let company = '';
-    const compEl = card.querySelector('.company-name a, .company-name, [class*="company-name"], .boss-info .company-name, .company-info a, [class*="company"] a');
-    if (compEl) company = compEl.textContent.trim();
+    const salaryRaw = readElementText(salEl, ['aria-label', 'title', 'data-salary', 'data-value']);
+    const salaryObfuscated = jobData ? jobData.hasPrivateUseCharacters(salaryRaw) : false;
     return {
       id: id,
-      name: nameEl ? nameEl.textContent.trim() : '未知岗位',
-      salary: salEl ? salEl.textContent.trim() : '',
+      name: readElementText(nameEl, ['aria-label', 'title']) || '未知岗位',
+      salary: jobData ? jobData.readableSalary(salaryRaw) : salaryRaw,
+      salaryRaw: salaryRaw,
+      salaryObfuscated: salaryObfuscated,
       tags: tags,
-      company: company,
+      company: readElementText(compEl, ['aria-label', 'title', 'data-name', 'data-company']),
+      area: readElementText(areaEl, ['aria-label', 'title', 'data-area', 'data-location']),
       link: link
     };
+  }
+
+  async function fetchApiJobs(count) {
+    if (!jobData) return { jobs: [], warning: '岗位字段解析组件未加载，已回退到页面文字' };
+    const pageSize = 30;
+    const pageCount = Math.max(1, Math.ceil(Math.min(200, count || 20) / pageSize));
+    const jobs = [];
+    const seen = new Set();
+    try {
+      for (let page = 1; page <= pageCount; page++) {
+        const query = jobData.buildSearchParams(location.search, page, pageSize);
+        const response = await fetch('/wapi/zpgeek/search/joblist.json?' + query, {
+          credentials: 'include',
+          headers: { Accept: 'application/json' }
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const payload = await response.json();
+        if (payload.code !== 0) throw new Error(payload.message || payload.msg || ('code ' + payload.code));
+        const pageJobs = jobData.extractApiJobs(payload, location.origin);
+        for (const job of pageJobs) {
+          const key = job.id || (job.name + '|' + job.company);
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          jobs.push(job);
+        }
+        const hasMore = payload.zpData && payload.zpData.hasMore;
+        if (!pageJobs.length || hasMore === false || jobs.length >= count) break;
+        await sleep(180);
+      }
+      return { jobs: jobs, warning: '' };
+    } catch (error) {
+      return {
+        jobs: jobs,
+        warning: 'BOSS 明文薪资接口暂不可用（' + (error.message || '未知错误') + '），已回退到页面字段'
+      };
+    }
   }
 
   async function scrape(count) {
@@ -46,7 +96,11 @@
       if (container) container.scrollTop = container.scrollHeight;
       await sleep(1200);
     }
-    return jobs.slice(0, count);
+    const apiResult = await fetchApiJobs(count);
+    const merged = jobData
+      ? jobData.mergeJobs(jobs, apiResult.jobs, count)
+      : jobs.slice(0, count);
+    return { jobs: merged, warning: apiResult.warning };
   }
 
   function findCardByJob(job) {
@@ -121,7 +175,9 @@
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'SCRAPE') {
-      scrape(msg.count || 20).then(jobs => sendResponse({ success: true, jobs: jobs })).catch(e => sendResponse({ success: false, error: e.message }));
+      scrape(msg.count || 20)
+        .then(result => sendResponse({ success: true, jobs: result.jobs, warning: result.warning }))
+        .catch(e => sendResponse({ success: false, error: e.message }));
       return true;
     }
     if (msg.type === 'OPEN_JD') {

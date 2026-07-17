@@ -10,7 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Edge%20%7C%20Chrome-brightgreen.svg)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-orange.svg)
 ![AI](https://img.shields.io/badge/AI-GPT--5.6%20via%20MuskAI-purple.svg)
-![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.2.1-blue.svg)
 
 [功能特性](#-功能特性) · [快速开始](#-快速开始) · [工作流程](#-工作流程) · [免责声明](#️-免责声明)
 
@@ -35,7 +35,7 @@
 - 🧠 **三档模型可选**：支持 GPT-5.6 Sol、Terra、Luna，默认使用均衡的 Terra
 - 📄 **简历文件解析**：PDF、DOCX、TXT、MD 在浏览器本地提取文字；扫描 PDF/图片可在确认后使用 MuskAI OCR
 - ✍️ **千岗千面招呼语**：每个岗位单独生成「熟悉 XXX、做过 XXX」格式招呼语，精准对口
-- ✅ **审核确认机制**：投递前列出匹配岗位（含筛选理由），你勾选确认，绝不盲投
+- ✅ **审核确认机制**：投递前列出岗位名称、公司、薪资、地区和筛选理由，你勾选确认，绝不盲投
 - 📎 **自动发送简历**：先发简历图片，再发招呼语，一个岗位完整闭环再投下一个
 - 📊 **实时日志面板**：进度、成功/失败一目了然，支持暂停 / 停止 / 重置
 - 🛡️ **拟人化节奏**：随机延迟、逐个投递，自然防风控；已投去重不重复打扰
@@ -114,6 +114,7 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 - **浏览器扩展**：Manifest V3，原生 JavaScript，无框架
 - **AI 模型**：通过 MuskAI Chat Completions 使用 GPT-5.6 Sol / Terra / Luna
 - **本地简历解析**：PDF.js 解析 PDF，Mammoth.js 解析 DOCX，浏览器原生读取 TXT / MD
+- **岗位字段提取**：优先读取 BOSS 同源岗位接口中的明文薪资、公司和地区，接口不可用时回退到页面字段
 - **架构**：Service Worker 编排 + Content Scripts 操作页面 + 侧边栏 UI
 
 ## 📁 项目结构

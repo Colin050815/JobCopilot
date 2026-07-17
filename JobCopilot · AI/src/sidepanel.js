@@ -209,17 +209,29 @@ function renderReview(screened) {
   matched.forEach(j => {
     html += '<div class="job-item"><input type="checkbox" checked data-id="' + esc(j.id) + '">'
       + '<div class="job-main"><div class="job-title">' + esc(j.name) + '</div>'
-      + '<div class="job-sub">' + esc(j.company) + ' · ' + esc(j.salary) + '</div>'
+      + renderJobMeta(j)
       + '<div class="job-reason m">✓ ' + esc(j.reason) + '</div></div></div>';
   });
   skipped.forEach(j => {
     html += '<div class="job-item skip"><input type="checkbox" disabled data-id="' + esc(j.id) + '">'
       + '<div class="job-main"><div class="job-title">' + esc(j.name) + '</div>'
-      + '<div class="job-sub">' + esc(j.company) + ' · ' + esc(j.salary) + '</div>'
+      + renderJobMeta(j)
       + '<div class="job-reason s">✗ ' + esc(j.reason) + '</div></div></div>';
   });
   $('reviewList').innerHTML = html || '<div class="job-sub">无岗位</div>';
   $('reviewCard').style.display = 'block';
+}
+function renderJobMeta(job) {
+  const salaryFallback = job.salaryUnavailable ? '需在 BOSS 查看' : '未获取';
+  const fields = [
+    ['公司', job.company || '未获取', !job.company],
+    ['薪资', job.salary || salaryFallback, !job.salary],
+    ['地区', job.area || '未获取', !job.area]
+  ];
+  return '<div class="job-meta">' + fields.map(field => {
+    return '<span class="' + (field[2] ? 'missing' : '') + '"><b>' +
+      field[0] + '：</b>' + esc(field[1]) + '</span>';
+  }).join('') + '</div>';
 }
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
