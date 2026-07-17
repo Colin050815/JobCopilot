@@ -1,6 +1,8 @@
 // ===== BOSS自动投递 Service Worker：编排 收集→筛选→审核→投递 + MuskAI GPT-5.6 =====
 importScripts('/src/selectors.js', '/src/muskapi-client.js'); // 让 SW 使用 CITY_MAP 与独立 AI 客户端
 const aiClient = MuskAIClient.createClient();
+const MAX_OCR_IMAGES = 5;
+const MAX_OCR_DATA_LENGTH = 12 * 1024 * 1024;
 const SCREEN_RESPONSE_FORMAT = {
   type: 'json_schema',
   json_schema: {
@@ -103,6 +105,67 @@ async function testAIConnection() {
   );
   if (!reply.trim()) throw new Error('MuskAI 连接成功，但模型没有返回内容');
   return { model: model, reply: reply.trim() };
+}
+
+function cleanOcrText(text) {
+  return String(text || '')
+    .trim()
+    .replace(/^```(?:text|markdown)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+}
+
+async function ocrResumeImages(images) {
+  if (!Array.isArray(images) || !images.length || images.length > MAX_OCR_IMAGES) {
+    throw new Error('OCR 仅支持 1-' + MAX_OCR_IMAGES + ' 页简历');
+  }
+  let totalLength = 0;
+  for (const image of images) {
+    if (typeof image !== 'string' || !/^data:image\/(?:jpeg|png|webp);base64,/i.test(image)) {
+      throw new Error('OCR 图片格式无效');
+    }
+    totalLength += image.length;
+  }
+  if (totalLength > MAX_OCR_DATA_LENGTH) {
+    throw new Error('OCR 图片总大小过大，请压缩或减少页数');
+  }
+
+  const cfg = await getCfg();
+  const model = selectedModel(cfg);
+  const content = [
+    {
+      type: 'text',
+      text: '请按页面顺序准确转写这份中文或英文简历。保留姓名、联系方式、标题、时间、公司、学校、项目、技能和项目符号的文字层级；不要总结、润色、评价、推测或补写。只输出可直接粘贴到纯文本框的简历全文。'
+    }
+  ];
+  images.forEach(image => {
+    content.push({
+      type: 'image_url',
+      image_url: { url: image, detail: 'high' }
+    });
+  });
+
+  const raw = await callAI(
+    cfg,
+    [
+      {
+        role: 'system',
+        content: '你是只做忠实转写的简历 OCR 助手。不得虚构原图中不存在的经历或信息。'
+      },
+      { role: 'user', content: content }
+    ],
+    6000
+  );
+  const text = cleanOcrText(raw);
+  if (!text) throw new Error('MuskAI 未返回可用的简历文字');
+  return { text: text, model: model };
+}
+
+function ocrErrorMessage(error) {
+  if (error && (error.status === 400 || error.status === 422)) {
+    return 'MuskAI 中转站或所选模型可能不支持图片识别，请改用本地可解析的 PDF、DOCX 或 TXT';
+  }
+  return error && error.message ? error.message : 'MuskAI OCR 失败';
 }
 
 // ── tab 注入 + 发消息 ──
@@ -262,6 +325,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     testAIConnection()
       .then(result => sendResponse({ ok: true, model: result.model, reply: result.reply }))
       .catch(error => sendResponse({ ok: false, error: error && error.message ? error.message : 'MuskAI 连接测试失败' }));
+    return true;
+  }
+  if (msg.type === 'OCR_RESUME') {
+    ocrResumeImages(msg.images)
+      .then(result => sendResponse({ ok: true, text: result.text, model: result.model }))
+      .catch(error => sendResponse({ ok: false, error: ocrErrorMessage(error) }));
     return true;
   }
   if (msg.type === 'START_COLLECT') { runCollect(); sendResponse({ ok: true }); return; }

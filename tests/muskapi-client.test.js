@@ -73,6 +73,29 @@ test('parses string and content-part responses', () => {
   assert.throws(() => extractContent({ choices: [] }), /返回格式异常/);
 });
 
+test('preserves multimodal Chat Completions message content for OCR', async () => {
+  let body;
+  const client = createClient({
+    fetchImpl: async (url, options) => {
+      body = JSON.parse(options.body);
+      return jsonResponse(completion('OCR text'));
+    }
+  });
+  const content = [
+    { type: 'text', text: 'transcribe' },
+    {
+      type: 'image_url',
+      image_url: { url: 'data:image/jpeg;base64,b2Ny', detail: 'high' }
+    }
+  ];
+  await client.chat({
+    apiKey: 'test-key',
+    messages: [{ role: 'user', content: content }]
+  });
+  assert.deepEqual(body.messages[0].content, content);
+  assert.equal(body.store, false);
+});
+
 test('extracts JSON from direct, fenced, and surrounding text output', () => {
   assert.deepEqual(extractJsonObject('{"match":true,"reason":"匹配"}'), {
     match: true,
