@@ -36,6 +36,93 @@
     return result;
   }
 
+  function parseCityNames(value) {
+    const seen = new Set();
+    const names = [];
+    for (const rawName of String(value || '').split(/[\/、,，;；\s]+/)) {
+      const name = rawName.trim().replace(/[市省]$/, '');
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      names.push(name);
+    }
+    return names;
+  }
+
+  function resolveCitySearches(value, cityMap) {
+    cityMap = cityMap || {};
+    let requested = parseCityNames(value);
+    if (requested.length === 1 && !cityMap[requested[0]]) {
+      const connectorParts = requested[0].split(/[和跟与]/).map(function (name) {
+        return name.trim().replace(/[市省]$/, '');
+      }).filter(Boolean);
+      if (connectorParts.length > 1 && connectorParts.every(function (name) { return Boolean(cityMap[name]); })) {
+        requested = connectorParts;
+      }
+    }
+    const cities = [];
+    const unknown = [];
+    const seenCodes = new Set();
+    for (const name of requested) {
+      const code = cleanText(cityMap[name]);
+      if (!code) {
+        unknown.push(name);
+        continue;
+      }
+      if (seenCodes.has(code)) continue;
+      seenCodes.add(code);
+      cities.push({ name: name, code: code });
+    }
+    const usedFallback = requested.length > 0 && cities.length === 0;
+    if (!cities.length) {
+      cities.push({
+        name: '全国',
+        code: cleanText(cityMap['全国']) || '100010000'
+      });
+    }
+    return {
+      cities: cities,
+      unknown: unknown,
+      usedFallback: usedFallback
+    };
+  }
+
+  function allocateCityTargets(cityCount, totalCount) {
+    const count = Math.max(1, Math.floor(Number(totalCount) || 1));
+    const cities = Math.max(1, Math.floor(Number(cityCount) || 1));
+    const effectiveTotal = Math.max(count, cities);
+    const base = Math.floor(effectiveTotal / cities);
+    const remainder = effectiveTotal % cities;
+    return Array.from({ length: cities }, function (_, index) {
+      return base + (index < remainder ? 1 : 0);
+    });
+  }
+
+  function mergeCityJobResults(results, limit) {
+    const jobs = [];
+    const seen = new Set();
+    const max = Math.max(1, Math.floor(Number(limit) || 1));
+    for (const result of results || []) {
+      for (const rawJob of (result && result.jobs) || []) {
+        const job = rawJob || {};
+        const key = cleanText(job.id) || [
+          cleanText(job.name),
+          cleanText(job.company),
+          cleanText(job.area)
+        ].join('|');
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        jobs.push(Object.assign({}, job, {
+          area: cleanText(job.area) || cleanText(result.cityName),
+          sourceCityName: cleanText(result.cityName),
+          sourceCityCode: cleanText(result.cityCode),
+          sourceSearchUrl: cleanText(result.searchUrl)
+        }));
+        if (jobs.length >= max) return jobs;
+      }
+    }
+    return jobs;
+  }
+
   function normalizeArea(source) {
     source = source || {};
     const structured = uniqueTexts([
@@ -196,6 +283,10 @@
     hasPrivateUseCharacters: hasPrivateUseCharacters,
     readableSalary: readableSalary,
     uniqueTexts: uniqueTexts,
+    parseCityNames: parseCityNames,
+    resolveCitySearches: resolveCitySearches,
+    allocateCityTargets: allocateCityTargets,
+    mergeCityJobResults: mergeCityJobResults,
     normalizeArea: normalizeArea,
     parseApiJob: parseApiJob,
     extractApiJobs: extractApiJobs,

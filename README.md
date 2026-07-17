@@ -10,7 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Edge%20%7C%20Chrome-brightgreen.svg)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-orange.svg)
 ![AI](https://img.shields.io/badge/AI-GPT--5.6%20via%20MuskAI-purple.svg)
-![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)
 
 [功能特性](#-功能特性) · [快速开始](#-快速开始) · [工作流程](#-工作流程) · [免责声明](#️-免责声明)
 
@@ -31,6 +31,7 @@
 ## ✨ 功能特性
 
 - 🔍 **自动搜索收集**：按关键词、城市、行业、公司规模自动抓取岗位，数量自定义
+- 🌏 **多城市合并**：成都 / 重庆等多个城市会分别收集、平均分配总数量并合并去重
 - 🤖 **AI 智能筛选**：GPT-5.6 结合你的简历，自动剔除不匹配/超纲岗位，只投够得着的
 - 🧠 **三档模型可选**：支持 GPT-5.6 Sol、Terra、Luna，默认使用均衡的 Terra
 - 📄 **简历文件解析**：PDF、DOCX、TXT、MD 在浏览器本地提取文字；扫描 PDF/图片可在确认后使用 MuskAI OCR
@@ -79,7 +80,7 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 | 简历文件 | 支持 PDF、DOCX、TXT、MD、JPG、PNG、WebP；可本地解析文字或生成投递图片 |
 | 投递图片 | 可由简历文件在本机生成，也可手动上传；多张图片会按页发送给 HR |
 | 简历文字 | 用于 AI 岗位筛选和生成更精准的招呼语 |
-| 关键词 / 城市 | 岗位搜索条件 |
+| 关键词 / 城市 | 岗位搜索条件；多个城市可用 `/`、逗号、空格或“和/跟/与”分隔 |
 | 收集数量 | 每次抓取的岗位数 |
 
 ### 4. 使用

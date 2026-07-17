@@ -190,14 +190,15 @@ function waitTabComplete(tabId) {
     chrome.tabs.get(tabId, (t) => { if (t && t.status === 'complete') { chrome.tabs.onUpdated.removeListener(lis); setTimeout(resolve, 1200); } });
   });
 }
-function resolveCity(cfg) {
-  const firstCity = (cfg.city || '').split(/[\/、,，\s]+/)[0].replace(/[市省]$/, '') || '';
-  const code = (typeof CITY_MAP !== 'undefined' && CITY_MAP[firstCity]) || '100010000';
-  return { name: firstCity, code: code, found: code !== '100010000' || firstCity === '全国' };
+function resolveCities(cfg) {
+  return JobDataCore.resolveCitySearches(
+    cfg.city || '',
+    typeof CITY_MAP !== 'undefined' ? CITY_MAP : {}
+  );
 }
-function buildSearchUrl(cfg) {
-  const c = resolveCity(cfg);
-  const params = new URLSearchParams({ query: cfg.keyword || '', city: c.code });
+function buildSearchUrl(cfg, city) {
+  const selectedCity = city || resolveCities(cfg).cities[0];
+  const params = new URLSearchParams({ query: cfg.keyword || '', city: selectedCity.code });
   // 行业/规模：BOSS 代码不确定，暂不加入（错误代码会导致搜不到任何岗位）
   return 'https://www.zhipin.com/web/geek/jobs?' + params.toString();
 }
@@ -210,7 +211,6 @@ async function ensureTab(url) {
   await sleep(2000);
   return tab;
 }
-async function getSearchTab(cfg) { return ensureTab(buildSearchUrl(cfg)); }
 function curUrl(tabId) { return new Promise(res => chrome.tabs.get(tabId, t => res((t && t.url) || ''))); }
 
 // ── 流程：收集 + 筛选 ──
@@ -223,19 +223,53 @@ async function runCollect() {
   if (!cfg.keyword) { log('请先填写岗位关键词', 'error'); state.phase = 'idle'; pushPhase(); return; }
   if (!(cfg.resumeText || '').trim()) { log('请先在设置里填写"简历文字"（AI筛选和招呼语都需要它）', 'error'); state.phase = 'idle'; pushPhase(); return; }
 
-  const _c = resolveCity(cfg);
-  log('打开搜索页：' + cfg.keyword + ' | 城市：' + (_c.found ? _c.name : '全国'));
-  if (cfg.city && !_c.found) log('城市"' + cfg.city + '"未识别，已按全国搜索', 'warn');
-  const tab = await getSearchTab(cfg);
-  const count = parseInt(cfg.count) || 20;
+  const count = Math.min(200, Math.max(1, parseInt(cfg.count) || 20));
+  const cityResolution = resolveCities(cfg);
+  const cities = cityResolution.cities;
+  const targets = JobDataCore.allocateCityTargets(cities.length, count);
+  const effectiveTarget = targets.reduce((sum, value) => sum + value, 0);
+  const cityResults = [];
 
-  log('收集岗位中（目标 ' + count + ' 个）...');
-  await ensureInjected(tab.id, 'src/content-search.js');
-  const r = await sendToTab(tab.id, { type: 'SCRAPE', count: count });
-  if (!r || !r.success) { log('收集失败：' + (r && r.error), 'error'); state.phase = 'idle'; pushPhase(); return; }
-  if (r.warning) log(r.warning, 'warn');
-  state.jobs = r.jobs || [];
-  log('收集到 ' + state.jobs.length + ' 个岗位', 'success');
+  if (cityResolution.unknown.length) {
+    const action = cityResolution.usedFallback ? '未识别任何城市，已按全国搜索' : '已忽略';
+    log('未识别城市：' + cityResolution.unknown.join('、') + '；' + action, 'warn');
+  }
+  if (effectiveTarget !== count) {
+    log('收集数量少于城市数，已调整为每个城市至少 1 个岗位', 'warn');
+  }
+  log('开始多城市收集：' + cities.map(city => city.name).join('、') + ' | 总目标 ' + effectiveTarget + ' 个');
+
+  for (let index = 0; index < cities.length; index++) {
+    if (state.aborted) break;
+    await waitIfPaused();
+    if (state.aborted) break;
+    const city = cities[index];
+    const cityTarget = targets[index];
+    const searchUrl = buildSearchUrl(cfg, city);
+    log('[' + (index + 1) + '/' + cities.length + '] 打开 ' + city.name + ' 搜索页，目标 ' + cityTarget + ' 个岗位');
+    try {
+      const tab = await ensureTab(searchUrl);
+      await ensureInjected(tab.id, 'src/content-search.js');
+      const r = await sendToTab(tab.id, { type: 'SCRAPE', count: cityTarget });
+      if (!r || !r.success) {
+        log(city.name + '收集失败：' + ((r && r.error) || '页面无响应'), 'error');
+        continue;
+      }
+      if (r.warning) log(city.name + '：' + r.warning, 'warn');
+      cityResults.push({
+        cityName: city.name,
+        cityCode: city.code,
+        searchUrl: searchUrl,
+        jobs: r.jobs || []
+      });
+      log(city.name + '收集到 ' + ((r.jobs && r.jobs.length) || 0) + ' 个岗位', 'success');
+    } catch (error) {
+      log(city.name + '收集失败：' + (error.message || '页面导航异常'), 'error');
+    }
+  }
+
+  state.jobs = JobDataCore.mergeCityJobResults(cityResults, effectiveTarget);
+  log('多城市合并去重后共 ' + state.jobs.length + ' 个岗位', 'success');
   if (!state.jobs.length) { state.phase = 'idle'; pushPhase(); return; }
 
   // 筛选（并发3）
@@ -302,8 +336,6 @@ async function runDeliver(jobIds) {
   const ids = (jobIds || []).filter(id => !state.processed[id]);
   if (!ids.length) { log('没有可投递的岗位（可能已投过，可点重置）', 'warn'); finishDeliver(); return; }
   log('后台已锁定本轮投递：仅 ' + ids.length + ' 个已勾选且 AI 匹配的岗位', 'info');
-  const searchUrl = buildSearchUrl(cfg);
-
   for (let k = 0; k < ids.length; k++) {
     if (state.aborted) break; await waitIfPaused(); if (state.aborted) break;
     const job = findJob(ids[k]);
@@ -311,6 +343,7 @@ async function runDeliver(jobIds) {
     log('[' + (k + 1) + '/' + ids.length + '] ' + job.name + ' - ' + (job.company || ''));
 
     // 1. 回搜索页，点开卡片读取该岗位完整JD
+    const searchUrl = job.sourceSearchUrl || buildSearchUrl(cfg);
     const tab = await ensureTab(searchUrl);
     await ensureInjected(tab.id, 'src/content-search.js');
     log('  读取岗位JD...');

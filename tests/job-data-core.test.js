@@ -8,6 +8,10 @@ const {
   parseApiJob,
   extractApiJobs,
   buildSearchParams,
+  parseCityNames,
+  resolveCitySearches,
+  allocateCityTargets,
+  mergeCityJobResults,
   mergeJobs,
   prepareDeliveryBatch,
   createDeliveryGate
@@ -69,6 +73,78 @@ test('builds a same-search API query while preserving keyword and city', () => {
   assert.equal(params.get('page'), '2');
   assert.equal(params.get('pageSize'), '30');
   assert.equal(params.get('salary'), '');
+});
+
+test('parses, normalizes, and deduplicates multiple city names', () => {
+  assert.deepEqual(
+    parseCityNames('成都市 / 重庆，成都; 北京市'),
+    ['成都', '重庆', '北京']
+  );
+});
+
+test('resolves every valid city and reports unknown city names', () => {
+  const resolved = resolveCitySearches('成都 / 不存在 / 重庆', {
+    '全国': '100010000',
+    '成都': '101270100',
+    '重庆': '101040100'
+  });
+  assert.deepEqual(resolved.cities, [
+    { name: '成都', code: '101270100' },
+    { name: '重庆', code: '101040100' }
+  ]);
+  assert.deepEqual(resolved.unknown, ['不存在']);
+  assert.equal(resolved.usedFallback, false);
+});
+
+test('understands natural Chinese connectors between known cities', () => {
+  const cityMap = {
+    '全国': '100010000',
+    '成都': '101270100',
+    '重庆': '101040100'
+  };
+  assert.deepEqual(
+    resolveCitySearches('成都跟重庆', cityMap).cities.map(city => city.name),
+    ['成都', '重庆']
+  );
+  assert.deepEqual(
+    resolveCitySearches('成都和重庆', cityMap).cities.map(city => city.name),
+    ['成都', '重庆']
+  );
+});
+
+test('falls back to nationwide search only when no requested city is recognized', () => {
+  const resolved = resolveCitySearches('火星市', { '全国': '100010000' });
+  assert.deepEqual(resolved.cities, [{ name: '全国', code: '100010000' }]);
+  assert.deepEqual(resolved.unknown, ['火星']);
+  assert.equal(resolved.usedFallback, true);
+});
+
+test('allocates the total target evenly and keeps at least one job per city', () => {
+  assert.deepEqual(allocateCityTargets(2, 20), [10, 10]);
+  assert.deepEqual(allocateCityTargets(2, 5), [3, 2]);
+  assert.deepEqual(allocateCityTargets(2, 1), [1, 1]);
+});
+
+test('merges city results without duplicates and preserves each job search source', () => {
+  const jobs = mergeCityJobResults([
+    {
+      cityName: '成都',
+      cityCode: '101270100',
+      searchUrl: 'https://www.zhipin.com/web/geek/jobs?city=101270100',
+      jobs: [{ id: 'chengdu-one', name: 'AI 实习生' }, { id: 'duplicate', name: '后端实习生' }]
+    },
+    {
+      cityName: '重庆',
+      cityCode: '101040100',
+      searchUrl: 'https://www.zhipin.com/web/geek/jobs?city=101040100',
+      jobs: [{ id: 'duplicate', name: '后端实习生' }, { id: 'chongqing-one', name: 'Agent 实习生' }]
+    }
+  ], 20);
+  assert.deepEqual(jobs.map(job => job.id), ['chengdu-one', 'duplicate', 'chongqing-one']);
+  assert.equal(jobs[0].sourceCityName, '成都');
+  assert.equal(jobs[2].sourceCityName, '重庆');
+  assert.equal(jobs[2].area, '重庆');
+  assert.match(jobs[2].sourceSearchUrl, /101040100/);
 });
 
 test('merges API fields into the matching DOM card and keeps DOM delivery identity', () => {
