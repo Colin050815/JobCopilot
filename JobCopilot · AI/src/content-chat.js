@@ -67,7 +67,7 @@
     const timeTextFromElement = firstItemText(item, ['.time', '[class*="time-text"]']);
     const timeMatch = rawText.match(/(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}|\d{1,2}月\d{1,2}日)\s+\d{1,2}:\d{2}|(?:昨天\s*)?\d{1,2}:\d{2}/);
     const timeText = timeTextFromElement || (timeMatch ? timeMatch[0] : '');
-    const preview = firstItemText(item, [
+    const previewText = firstItemText(item, [
       '.last-msg-text',
       '.last-msg',
       '.last-message',
@@ -75,6 +75,10 @@
       '[class*="last-message"]',
       '[class*="message-preview"]'
     ]) || (rawText.match(/\[送达\][\s\S]*$/) || [''])[0];
+    const hasDeliveredMarker = /[\[【]\s*送达\s*[\]】]/.test(rawText);
+    const preview = hasDeliveredMarker && !/[\[【]\s*送达\s*[\]】]/.test(previewText)
+      ? '[送达]' + previewText
+      : previewText;
     const hrName = firstItemText(item, [
       '.geek-name',
       '.name-text',
@@ -161,6 +165,18 @@
       '.chat-position-content .position-content',
       '[ka="geek_chat_job_detail"]'
     ].map(selector => root.querySelector(selector)).find(isVisible);
+    const recentSelfMessages = Array.from(root.querySelectorAll(
+      '.chat-message .im-list > li.message-item, .im-list > li.message-item'
+    )).slice(-60).filter(element => element.classList.contains('item-myself')).map(element => {
+      const textElement = element.querySelector('.text-content') ||
+        element.querySelector('.message-content .text') ||
+        element.querySelector('.message-content');
+      return {
+        text: clean(textElement && (textElement.innerText || textElement.textContent)),
+        timeText: firstItemText(element, ['.item-time .time', '.time']),
+        status: firstItemText(element, ['.message-status'])
+      };
+    }).filter(message => message.text).slice(-12);
     return {
       jobUrl: links[0] ? links[0].href : '',
       position: firstText([
@@ -172,7 +188,8 @@
       ]),
       company: companyFromHeader || infoLines[1] || '',
       hrName: firstText(['.top-info-content .name-text', '.top-info-content .name']) || infoLines[0] || '',
-      hasJobDetailTrigger: Boolean(detailTrigger)
+      hasJobDetailTrigger: Boolean(detailTrigger),
+      recentSelfMessages: recentSelfMessages
     };
   }
 
@@ -198,22 +215,31 @@
     });
   }
 
-  async function confirmConversationTarget(item, target, timeout) {
+  function activeContextMatchesTarget(context, target) {
     const wantedPath = normalizedJobPath(target && target.jobUrl);
+    const currentPath = normalizedJobPath(context && context.jobUrl);
+    if (wantedPath && currentPath && wantedPath === currentPath) return true;
+
+    const wantedHr = clean(target && target.hrName).replace(/\s+/g, '');
+    const currentHr = clean(context && context.hrName).replace(/\s+/g, '');
+    const wantedPosition = clean(target && target.position).replace(/\s+/g, '');
+    const currentPosition = clean(context && context.position).replace(/\s+/g, '');
+    const hrMatches = wantedHr && currentHr &&
+      (wantedHr === currentHr || currentHr.includes(wantedHr));
+    const positionMatches = wantedPosition && currentPosition &&
+      (wantedPosition === currentPosition ||
+        currentPosition.includes(wantedPosition) ||
+        wantedPosition.includes(currentPosition));
+    return Boolean(hrMatches && (!wantedPosition || positionMatches));
+  }
+
+  async function confirmConversationTarget(item, target, timeout) {
     const startedAt = Date.now();
     while (Date.now() - startedAt < (timeout || 5000)) {
-      if (itemShowsSelected(item)) return true;
       const context = findActiveJobContext();
-      const currentPath = normalizedJobPath(context.jobUrl);
-      if (wantedPath && currentPath && wantedPath === currentPath) return true;
-      const wantedHr = clean(target && target.hrName).replace(/\s+/g, '');
-      const currentHr = clean(context.hrName).replace(/\s+/g, '');
-      const wantedPosition = clean(target && target.position).replace(/\s+/g, '');
-      const currentPosition = clean(context.position).replace(/\s+/g, '');
-      const hrMatches = wantedHr && currentHr && (wantedHr === currentHr || currentHr.includes(wantedHr));
-      const positionMatches = wantedPosition && currentPosition &&
-        (wantedPosition === currentPosition || currentPosition.includes(wantedPosition) || wantedPosition.includes(currentPosition));
-      if (hrMatches && (!wantedPosition || positionMatches)) return true;
+      if (activeContextMatchesTarget(context, target)) return true;
+      const hasIdentity = clean(target && (target.jobUrl || target.hrName || target.position));
+      if (!hasIdentity && itemShowsSelected(item)) return true;
       await sleep(250);
     }
     return false;
@@ -224,8 +250,16 @@
     const all = getConversationItems().slice(0, 100).map(readConversationItem);
     const core = globalThis.MobileFollowupCore;
     if (!core) return { success: false, error: '手机投递扫描组件未加载' };
-    const candidates = core.filterCandidates(all, params, new Date()).slice(0, 30);
-    return { success: true, conversations: candidates, scannedCount: all.length };
+    const now = new Date();
+    const inRange = all.filter(item => core.isWithinRange(item.timeText, params, now));
+    const candidates = inRange.filter(item => core.isGenericIntroText(item.preview)).slice(0, 30);
+    return {
+      success: true,
+      conversations: candidates,
+      scannedCount: all.length,
+      rangeCount: inRange.length,
+      genericCount: candidates.length
+    };
   }
 
   function findConversationMatches(target) {
@@ -259,8 +293,19 @@
     if (!confirmed) {
       return { success: false, error: '点击后无法确认当前会话身份，已跳过' };
     }
-    await sleep(300);
-    const context = findActiveJobContext();
+    await sleep(500);
+    let context = findActiveJobContext();
+    const core = globalThis.MobileFollowupCore;
+    if (core && !core.hasDeliveredMarker(target.preview)) {
+      const startedAt = Date.now();
+      while (
+        Date.now() - startedAt < 3500 &&
+        !core.confirmOutgoingGenericIntro(target.preview, context.recentSelfMessages)
+      ) {
+        await sleep(250);
+        context = findActiveJobContext();
+      }
+    }
     return {
       success: true,
       context: context

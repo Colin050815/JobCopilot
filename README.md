@@ -10,7 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Edge%20%7C%20Chrome-brightgreen.svg)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-orange.svg)
 ![AI](https://img.shields.io/badge/AI-GPT--5.6%20via%20MuskAI-purple.svg)
-![Version](https://img.shields.io/badge/version-1.4.1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.4.2-blue.svg)
 
 [功能特性](#-功能特性) · [快速开始](#-快速开始) · [工作流程](#-工作流程) · [免责声明](#️-免责声明)
 
@@ -102,7 +102,7 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 如果你先在 BOSS 手机 App 投递了一批岗位，可在网页端登录同一账号后使用侧边栏的 **④ 手机投递补充**：
 
 1. 填写手机投递的准确日期、开始时间和结束时间；单次范围最多 3 小时。
-2. 点击 **扫描会话 + 生成草稿**。这一步只扫描该时间段内预览为“`[送达]您好，我是…`”一类通用开场白的会话，读取对应 JD 并生成补充说明，不会发送消息。
+2. 点击 **扫描会话 + 生成草稿**。这一步只扫描该时间段内预览为“`[送达]您好，我是…`”一类通用开场白的会话；BOSS 将“送达”状态与正文分开显示时，插件会点开会话并确认正文确实由你发送。确认后读取对应 JD 并生成补充说明，不会发送消息。
 3. 逐条核对 HR、公司、岗位、原消息和草稿；可编辑正文或取消勾选。读取不到唯一会话或 JD 的项目会被禁用，不会凭空生成。
 4. 点击 **确认发送选中** 后，浏览器还会列出本次收件人并再次确认。只有确认后的选中草稿才会逐条发送。
 

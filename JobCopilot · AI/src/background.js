@@ -414,11 +414,18 @@ async function runFollowupDrafting(params) {
     if (!scan || !scan.success) throw new Error((scan && scan.error) || '会话扫描失败');
 
     const candidates = (scan.conversations || []).slice(0, 30);
-    log('聊天列表读取 ' + (scan.scannedCount || 0) + ' 条，符合时间和通用开场白条件 ' + candidates.length + ' 条');
+    log('聊天列表读取 ' + (scan.scannedCount || 0) + ' 条，时间范围内 ' +
+      (scan.rangeCount || 0) + ' 条，通用开场白候选 ' + candidates.length + ' 条');
     if (!candidates.length) {
       state.phase = 'idle';
       pushPhase();
-      return { ok: false, error: '没有找到符合时间范围且以通用开场白送达的会话' };
+      if (!(scan.scannedCount || 0)) {
+        return { ok: false, error: '没有读取到 BOSS 会话列表，请刷新聊天页后重试' };
+      }
+      if (!(scan.rangeCount || 0)) {
+        return { ok: false, error: '已读取会话，但没有找到该日期和时间范围内的会话；请适当扩大时间范围' };
+      }
+      return { ok: false, error: '时间范围内有会话，但预览不是“您好，我是…”格式的通用开场白' };
     }
 
     const drafts = [];
@@ -455,6 +462,17 @@ async function runFollowupDrafting(params) {
       conversation.hrName = context.hrName || conversation.hrName;
       conversation.position = context.position || conversation.position;
       conversation.company = context.company || conversation.company;
+      if (!MobileFollowupCore.confirmOutgoingGenericIntro(
+        conversation.preview,
+        context.recentSelfMessages
+      )) {
+        drafts.push(Object.assign({}, conversation, {
+          text: '',
+          error: '无法确认该通用开场白是由你发送的消息，已阻止生成和发送'
+        }));
+        progress(index + 1, candidates.length, '生成补充草稿');
+        continue;
+      }
       conversation.jobUrl = MobileFollowupCore.normalizeJobDetailUrl(
         context.jobUrl || conversation.jobUrl
       );

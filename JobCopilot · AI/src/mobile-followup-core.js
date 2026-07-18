@@ -95,10 +95,46 @@
     );
   }
 
-  function isLikelyGenericIntro(preview) {
+  function hasDeliveredMarker(preview) {
+    return /[\[【]\s*送达\s*[\]】]/.test(cleanText(preview));
+  }
+
+  function isGenericIntroText(preview) {
     const text = cleanText(preview);
-    if (!text || !text.includes('[送达]')) return false;
+    if (!text) return false;
     return /您好[，,]?\s*我是|我叫|希望有机会|对(?:贵公司|这个岗位|该岗位).*感兴趣/.test(text);
+  }
+
+  function isLikelyGenericIntro(preview) {
+    return hasDeliveredMarker(preview) && isGenericIntroText(preview);
+  }
+
+  function comparableIntro(value) {
+    return cleanText(value)
+      .replace(/[\[【]\s*送达\s*[\]】]/g, '')
+      .replace(/[.…]{2,}$/g, '')
+      .replace(/[\s，,。！？!?:：；;、"'“”‘’（）()【】[\]]+/g, '')
+      .trim();
+  }
+
+  function textsOverlap(left, right) {
+    const a = comparableIntro(left);
+    const b = comparableIntro(right);
+    if (!a || !b) return false;
+    if (a.includes(b) || b.includes(a)) return Math.min(a.length, b.length) >= 8;
+    const limit = Math.min(a.length, b.length);
+    let prefix = 0;
+    while (prefix < limit && a[prefix] === b[prefix]) prefix++;
+    return prefix >= 8;
+  }
+
+  function confirmOutgoingGenericIntro(preview, recentSelfMessages) {
+    if (!isGenericIntroText(preview)) return false;
+    if (hasDeliveredMarker(preview)) return true;
+    return (recentSelfMessages || []).some(function (message) {
+      const text = cleanText(message && (message.text || message));
+      return isGenericIntroText(text) && textsOverlap(preview, text);
+    });
   }
 
   function normalizeJobDetailUrl(value, baseUrl) {
@@ -119,7 +155,7 @@
   function filterCandidates(conversations, params, now) {
     return (conversations || []).filter(function (conversation) {
       return isWithinRange(conversation.timeText, params, now) &&
-        isLikelyGenericIntro(conversation.preview);
+        isGenericIntroText(conversation.preview);
     });
   }
 
@@ -174,7 +210,10 @@
     parseConversationDateTime: parseConversationDateTime,
     validateRange: validateRange,
     isWithinRange: isWithinRange,
+    hasDeliveredMarker: hasDeliveredMarker,
+    isGenericIntroText: isGenericIntroText,
     isLikelyGenericIntro: isLikelyGenericIntro,
+    confirmOutgoingGenericIntro: confirmOutgoingGenericIntro,
     normalizeJobDetailUrl: normalizeJobDetailUrl,
     filterCandidates: filterCandidates,
     validateDraftSelection: validateDraftSelection
