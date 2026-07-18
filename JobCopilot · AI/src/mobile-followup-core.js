@@ -101,6 +101,21 @@
     return /您好[，,]?\s*我是|我叫|希望有机会|对(?:贵公司|这个岗位|该岗位).*感兴趣/.test(text);
   }
 
+  function normalizeJobDetailUrl(value, baseUrl) {
+    const text = cleanText(value);
+    if (!text) return '';
+    try {
+      const url = new URL(text, baseUrl || 'https://www.zhipin.com/');
+      const hostname = url.hostname.toLowerCase();
+      if (hostname !== 'zhipin.com' && !hostname.endsWith('.zhipin.com')) return '';
+      if (!/^\/job_detail\/[^/?#]+\.html$/i.test(url.pathname)) return '';
+      url.hash = '';
+      return url.href;
+    } catch (error) {
+      return '';
+    }
+  }
+
   function filterCandidates(conversations, params, now) {
     return (conversations || []).filter(function (conversation) {
       return isWithinRange(conversation.timeText, params, now) &&
@@ -130,7 +145,7 @@
       if (!id || !candidate) {
         return { ok: false, error: '补充消息与本次扫描会话不一致', drafts: [] };
       }
-      if (candidate.scanError || !candidate.jobUrl) {
+      if (candidate.scanError || !normalizeJobDetailUrl(candidate.jobUrl)) {
         return { ok: false, error: '所选会话缺少可核验的岗位详情，已阻止发送', drafts: [] };
       }
       if (eligibleIds && !eligibleIds.has(id)) {
@@ -160,6 +175,7 @@
     validateRange: validateRange,
     isWithinRange: isWithinRange,
     isLikelyGenericIntro: isLikelyGenericIntro,
+    normalizeJobDetailUrl: normalizeJobDetailUrl,
     filterCandidates: filterCandidates,
     validateDraftSelection: validateDraftSelection
   });

@@ -6,6 +6,7 @@ const {
   validateRange,
   isWithinRange,
   isLikelyGenericIntro,
+  normalizeJobDetailUrl,
   filterCandidates,
   validateDraftSelection
 } = require('../JobCopilot · AI/src/mobile-followup-core.js');
@@ -42,6 +43,19 @@ test('recognizes delivered generic introductions and excludes unrelated previews
   assert.equal(isLikelyGenericIntro('[送达]您好，我是重庆大学本科生，对该岗位很感兴趣'), true);
   assert.equal(isLikelyGenericIntro('HR：方便明天沟通吗？'), false);
   assert.equal(isLikelyGenericIntro('[送达]这是根据 JD 写的项目补充说明'), false);
+});
+
+test('accepts only exact BOSS job-detail URLs', () => {
+  assert.equal(
+    normalizeJobDetailUrl('/job_detail/abc123XYZ.html'),
+    'https://www.zhipin.com/job_detail/abc123XYZ.html'
+  );
+  assert.equal(
+    normalizeJobDetailUrl('https://www.zhipin.com/job_detail/abc123XYZ.html?lid=source#top'),
+    'https://www.zhipin.com/job_detail/abc123XYZ.html?lid=source'
+  );
+  assert.equal(normalizeJobDetailUrl('https://example.com/job_detail/abc123XYZ.html'), '');
+  assert.equal(normalizeJobDetailUrl('https://www.zhipin.com/web/geek/chat'), '');
 });
 
 test('filters the mobile application batch by time and generic greeting preview', () => {

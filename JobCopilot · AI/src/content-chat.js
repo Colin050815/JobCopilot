@@ -29,8 +29,10 @@
   const SEND_SELS = ['button.btn-send', '.btn-send', 'button[class*="send"]', '[class*="send-btn"]'];
   const IMG_SELS = ['.btn-sendimg input[type=file]', '.toolbar input[type=file]', 'input[type=file]'];
   const CHAT_LIST_SELS = [
+    '.user-list-content li[role="listitem"] .friend-content',
+    '.user-list-content li .friend-content',
+    '.friend-content',
     SELECTORS.chat.userList,
-    '.user-list-content li',
     '[class*="chat-list"] li',
     '[class*="conversation-list"] li'
   ];
@@ -44,16 +46,11 @@
   }
 
   function getConversationItems() {
-    const items = [];
-    const seen = new Set();
     for (const selector of CHAT_LIST_SELS) {
-      for (const item of document.querySelectorAll(selector)) {
-        if (!isVisible(item) || seen.has(item)) continue;
-        seen.add(item);
-        items.push(item);
-      }
+      const items = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+      if (items.length) return items;
     }
-    return items;
+    return [];
   }
 
   function firstItemText(item, selectors) {
@@ -67,9 +64,11 @@
 
   function readConversationItem(item, index) {
     const rawText = clean(item.innerText || item.textContent);
+    const timeTextFromElement = firstItemText(item, ['.time', '[class*="time-text"]']);
     const timeMatch = rawText.match(/(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}|\d{1,2}月\d{1,2}日)\s+\d{1,2}:\d{2}|(?:昨天\s*)?\d{1,2}:\d{2}/);
-    const timeText = timeMatch ? timeMatch[0] : '';
+    const timeText = timeTextFromElement || (timeMatch ? timeMatch[0] : '');
     const preview = firstItemText(item, [
+      '.last-msg-text',
       '.last-msg',
       '.last-message',
       '[class*="last-msg"]',
@@ -87,8 +86,17 @@
       '.company-name',
       '[class*="company-name"]',
       '[class*="brand-name"]'
-    ]);
+    ]) || (() => {
+      const nameBox = item.querySelector('.title-box .name-box');
+      if (!nameBox) return '';
+      const spans = Array.from(nameBox.querySelectorAll(':scope > span'))
+        .filter(element => !element.classList.contains('name-text'))
+        .map(element => clean(element.innerText || element.textContent))
+        .filter(Boolean);
+      return spans[0] || '';
+    })();
     const position = firstItemText(item, [
+      '.job-text',
       '.position-name',
       '.job-name',
       '.job-title',
@@ -99,13 +107,17 @@
       .replace(preview, '')
       .replace(timeText, ''))
       .slice(0, 180);
-    const dataKey = [
+    const dataAttributes = [
       'data-id',
       'data-conversation-id',
       'data-chat-id',
       'data-encrypt-job-id',
       'data-job-id'
-    ].map(attribute => clean(item.getAttribute(attribute))).find(Boolean) || '';
+    ];
+    const attributeNodes = [item, item.closest('li[role="listitem"]'), item.closest('li')].filter(Boolean);
+    const dataKey = attributeNodes
+      .flatMap(node => dataAttributes.map(attribute => clean(node.getAttribute(attribute))))
+      .find(Boolean) || '';
     const jobLink = item.querySelector('a[href*="/job_detail/"]');
     const matchKey = identityText + '|' + timeText;
     return {
@@ -123,30 +135,44 @@
   }
 
   function findActiveJobContext() {
-    const listItems = getConversationItems();
-    const outsideList = element => !listItems.some(item => item.contains(element));
-    const links = Array.from(document.querySelectorAll('a[href*="/job_detail/"]'))
-      .filter(element => isVisible(element) && outsideList(element));
-    const textOutsideList = selectors => {
+    const root = document.querySelector('.chat-conversation') || document;
+    const links = Array.from(root.querySelectorAll('a[href*="/job_detail/"]'))
+      .filter(isVisible);
+    const firstText = selectors => {
       for (const selector of selectors) {
-        for (const element of document.querySelectorAll(selector)) {
-          if (!isVisible(element) || !outsideList(element)) continue;
+        for (const element of root.querySelectorAll(selector)) {
+          if (!isVisible(element)) continue;
           const text = clean(element.innerText || element.textContent);
           if (text) return text;
         }
       }
       return '';
     };
+    const info = root.querySelector('.user-info-wrap');
+    const infoLines = clean(info && (info.innerText || info.textContent))
+      .split(/\s+/)
+      .filter(Boolean);
+    const companyFromHeader = firstText([
+      '.top-info-content .base-info span:not(.base-title)',
+      '.top-info-content .company-name'
+    ]);
+    const detailTrigger = [
+      '.chat-position-content .position-content .right-content',
+      '.chat-position-content .position-content',
+      '[ka="geek_chat_job_detail"]'
+    ].map(selector => root.querySelector(selector)).find(isVisible);
     return {
       jobUrl: links[0] ? links[0].href : '',
-      position: textOutsideList([
-        '.position-name',
+      position: firstText([
+        '.chat-position-content .position-name',
         '.job-name',
         '.job-title',
         '[class*="position-name"]',
         '[class*="job-name"]'
       ]),
-      company: textOutsideList(['.company-name', '[class*="company-name"]', '[class*="brand-name"]'])
+      company: companyFromHeader || infoLines[1] || '',
+      hrName: firstText(['.top-info-content .name-text', '.top-info-content .name']) || infoLines[0] || '',
+      hasJobDetailTrigger: Boolean(detailTrigger)
     };
   }
 
@@ -162,11 +188,14 @@
 
   function itemShowsSelected(item) {
     if (!item) return false;
-    if (item.getAttribute('aria-selected') === 'true' || item.getAttribute('data-selected') === 'true') {
-      return true;
-    }
-    const tokens = clean(item.className).toLowerCase().split(/\s+/);
-    return tokens.some(token => /^(active|selected|current|is-active|is-selected)$/.test(token));
+    const nodes = [item, item.closest('li[role="listitem"]'), item.closest('li')].filter(Boolean);
+    return nodes.some(node => {
+      if (node.getAttribute('aria-selected') === 'true' || node.getAttribute('data-selected') === 'true') {
+        return true;
+      }
+      const tokens = clean(node.className).toLowerCase().split(/\s+/);
+      return tokens.some(token => /^(active|selected|current|is-active|is-selected)$/.test(token));
+    });
   }
 
   async function confirmConversationTarget(item, target, timeout) {
@@ -177,6 +206,14 @@
       const context = findActiveJobContext();
       const currentPath = normalizedJobPath(context.jobUrl);
       if (wantedPath && currentPath && wantedPath === currentPath) return true;
+      const wantedHr = clean(target && target.hrName).replace(/\s+/g, '');
+      const currentHr = clean(context.hrName).replace(/\s+/g, '');
+      const wantedPosition = clean(target && target.position).replace(/\s+/g, '');
+      const currentPosition = clean(context.position).replace(/\s+/g, '');
+      const hrMatches = wantedHr && currentHr && (wantedHr === currentHr || currentHr.includes(wantedHr));
+      const positionMatches = wantedPosition && currentPosition &&
+        (wantedPosition === currentPosition || currentPosition.includes(wantedPosition) || wantedPosition.includes(currentPosition));
+      if (hrMatches && (!wantedPosition || positionMatches)) return true;
       await sleep(250);
     }
     return false;
@@ -188,60 +225,53 @@
     const core = globalThis.MobileFollowupCore;
     if (!core) return { success: false, error: '手机投递扫描组件未加载' };
     const candidates = core.filterCandidates(all, params, new Date()).slice(0, 30);
-    const enriched = [];
-    for (const candidate of candidates) {
-      const items = getConversationItems();
-      let matches = [];
-      if (candidate.dataKey) {
-        matches = items.filter(item => {
-          return [
-            'data-id',
-            'data-conversation-id',
-            'data-chat-id',
-            'data-encrypt-job-id',
-            'data-job-id'
-          ].some(attribute => clean(item.getAttribute(attribute)) === candidate.dataKey);
-        });
-      }
-      if (!matches.length) {
-        matches = items.filter((item, index) => readConversationItem(item, index).matchKey === candidate.matchKey);
-      }
-      if (matches.length !== 1) {
-        enriched.push(Object.assign({}, candidate, { scanError: '会话标识不唯一，已跳过' }));
-        continue;
-      }
-      matches[0].click();
-      await sleep(900);
-      const context = findActiveJobContext();
-      enriched.push(Object.assign({}, candidate, {
-        jobUrl: context.jobUrl || candidate.jobUrl,
-        position: context.position || candidate.position,
-        company: context.company || candidate.company
-      }));
+    return { success: true, conversations: candidates, scannedCount: all.length };
+  }
+
+  function findConversationMatches(target) {
+    const items = getConversationItems();
+    let matches = [];
+    if (target.dataKey) {
+      matches = items.filter(item => {
+        const nodes = [item, item.closest('li[role="listitem"]'), item.closest('li')].filter(Boolean);
+        return nodes.some(node => [
+          'data-id',
+          'data-conversation-id',
+          'data-chat-id',
+          'data-encrypt-job-id',
+          'data-job-id'
+        ].some(attribute => clean(node.getAttribute(attribute)) === target.dataKey));
+      });
     }
-    return { success: true, conversations: enriched, scannedCount: all.length };
+    if (!matches.length) {
+      matches = items.filter((item, index) => readConversationItem(item, index).matchKey === target.matchKey);
+    }
+    return matches;
+  }
+
+  async function selectMobileConversation(target) {
+    const matches = findConversationMatches(target);
+    if (matches.length !== 1) {
+      return { success: false, error: '未能唯一定位目标会话，已跳过' };
+    }
+    matches[0].click();
+    const confirmed = await confirmConversationTarget(matches[0], target, 6000);
+    if (!confirmed) {
+      return { success: false, error: '点击后无法确认当前会话身份，已跳过' };
+    }
+    await sleep(300);
+    const context = findActiveJobContext();
+    return {
+      success: true,
+      context: context
+    };
   }
 
   async function sendMobileFollowup(target, text) {
     if (!target.jobUrl) {
       return { success: false, error: '目标会话缺少岗位链接，已阻止发送' };
     }
-    const items = getConversationItems();
-    let matches = [];
-    if (target.dataKey) {
-      matches = items.filter(item => {
-        return [
-          'data-id',
-          'data-conversation-id',
-          'data-chat-id',
-          'data-encrypt-job-id',
-          'data-job-id'
-        ].some(attribute => clean(item.getAttribute(attribute)) === target.dataKey);
-      });
-    }
-    if (!matches.length) {
-      matches = items.filter((item, index) => readConversationItem(item, index).matchKey === target.matchKey);
-    }
+    const matches = findConversationMatches(target);
     if (matches.length !== 1) {
       return { success: false, error: '未能唯一定位目标会话，已阻止发送' };
     }
@@ -424,6 +454,12 @@
     }
     if (msg.type === 'SCAN_MOBILE_CONVERSATIONS') {
       scanMobileConversations(msg.params || {})
+        .then(r => sendResponse(r))
+        .catch(e => sendResponse({ success: false, error: e.message }));
+      return true;
+    }
+    if (msg.type === 'SELECT_MOBILE_CONVERSATION') {
+      selectMobileConversation(msg.target || {})
         .then(r => sendResponse(r))
         .catch(e => sendResponse({ success: false, error: e.message }));
       return true;

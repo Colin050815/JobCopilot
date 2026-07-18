@@ -10,7 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Edge%20%7C%20Chrome-brightgreen.svg)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-orange.svg)
 ![AI](https://img.shields.io/badge/AI-GPT--5.6%20via%20MuskAI-purple.svg)
-![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.4.1-blue.svg)
 
 [功能特性](#-功能特性) · [快速开始](#-快速开始) · [工作流程](#-工作流程) · [免责声明](#️-免责声明)
 
@@ -146,6 +146,7 @@ src/
 ├── content-search.js  # 搜索页：抓取岗位 + 建立联系
 ├── content-chat.js    # 聊天页：发送简历图片/招呼语 + 手机投递会话定位
 ├── content-job-detail.js # 岗位详情页：只读提取 JD
+├── job-detail-popup-capture.js # 从无 href 的“查看职位”入口捕获准确岗位链接
 ├── mobile-followup-core.js # 时间筛选、通用开场白识别与发送校验
 ├── selectors.js       # DOM 选择器与城市编码
 └── sidepanel.*        # 侧边栏界面（配置 / 审核 / 日志）

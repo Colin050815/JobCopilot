@@ -1,5 +1,5 @@
 // ===== BOSS自动投递 Service Worker：编排 收集→筛选→审核→投递 + MuskAI GPT-5.6 =====
-importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/mobile-followup-core.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
+importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/mobile-followup-core.js', '/src/job-detail-popup-capture.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
 const aiClient = MuskAIClient.createClient();
 const deliveryGate = JobDataCore.createDeliveryGate();
 const followupGate = JobDataCore.createDeliveryGate();
@@ -352,11 +352,40 @@ async function runCollect() {
 
 // ── 流程：为手机端刚投递的会话生成并审核补充介绍 ──
 async function readJobDetailInTab(tabId, jobUrl) {
-  const tab = await chrome.tabs.update(tabId, { url: jobUrl });
+  const safeUrl = MobileFollowupCore.normalizeJobDetailUrl(jobUrl);
+  if (!safeUrl) return { success: false, error: '岗位详情链接无效或不属于 BOSS' };
+  const tab = await chrome.tabs.update(tabId, { url: safeUrl });
   const loaded = await waitTabComplete(tab.id, 30000);
   if (!loaded) return { success: false, error: '岗位详情页加载超时' };
   await ensureInjected(tab.id, 'src/content-job-detail.js');
   return sendToTab(tab.id, { type: 'READ_JOB_DETAIL' }, 20000);
+}
+
+async function captureActiveJobDetailUrl(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      world: 'MAIN',
+      func: JobDetailPopupCapture.captureJobDetailUrlInPage
+    });
+    const captured = results && results[0] && results[0].result ? results[0].result : {};
+    const url = MobileFollowupCore.normalizeJobDetailUrl(captured.url);
+    return {
+      success: Boolean(url),
+      triggerFound: Boolean(captured.triggerFound),
+      url: url,
+      source: captured.source || '',
+      error: url ? '' : '未能从“查看职位”入口解析岗位详情链接'
+    };
+  } catch (error) {
+    return {
+      success: false,
+      triggerFound: false,
+      url: '',
+      source: '',
+      error: error.message || '岗位详情入口解析失败'
+    };
+  }
 }
 
 async function runFollowupDrafting(params) {
@@ -408,10 +437,41 @@ async function runFollowupDrafting(params) {
         progress(index + 1, candidates.length, '生成补充草稿');
         continue;
       }
+
+      const selection = await sendToTab(chatTab.id, {
+        type: 'SELECT_MOBILE_CONVERSATION',
+        target: conversation
+      }, 20000);
+      if (!selection || !selection.success) {
+        drafts.push(Object.assign({}, conversation, {
+          text: '',
+          error: (selection && selection.error) || '当前会话定位失败'
+        }));
+        progress(index + 1, candidates.length, '生成补充草稿');
+        continue;
+      }
+
+      const context = selection.context || {};
+      conversation.hrName = context.hrName || conversation.hrName;
+      conversation.position = context.position || conversation.position;
+      conversation.company = context.company || conversation.company;
+      conversation.jobUrl = MobileFollowupCore.normalizeJobDetailUrl(
+        context.jobUrl || conversation.jobUrl
+      );
+      if (!conversation.jobUrl && context.hasJobDetailTrigger) {
+        const captured = await captureActiveJobDetailUrl(chatTab.id);
+        if (captured.success) {
+          conversation.jobUrl = captured.url;
+          log('  已从 BOSS“查看职位”入口读取岗位链接', 'success');
+        }
+      }
+
       if (!conversation.jobUrl) {
         drafts.push(Object.assign({}, conversation, {
           text: '',
-          error: '当前会话未读取到岗位详情链接，请在 BOSS 手动查看'
+          error: context.hasJobDetailTrigger
+            ? '已找到“查看职位”，但未能解析准确链接；请刷新 BOSS 聊天页后重试'
+            : '当前会话没有可读取的“查看职位”入口，请在 BOSS 手动查看'
         }));
         progress(index + 1, candidates.length, '生成补充草稿');
         continue;
