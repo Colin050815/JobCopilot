@@ -318,6 +318,9 @@ $('btnBuildFollowups').addEventListener('click', async () => {
     start: $('followupStart').value,
     end: $('followupEnd').value
   };
+  mobileFollowupDrafts = [];
+  $('followupDraftList').innerHTML = '';
+  $('followupReview').hidden = true;
   setRunning(true);
   setFollowupStatus('正在只读扫描会话、读取岗位 JD 并生成草稿，不会发送消息…', 'warn');
   try {

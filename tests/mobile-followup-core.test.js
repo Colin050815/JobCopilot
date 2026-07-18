@@ -2,21 +2,29 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  parseConversationDateKey,
   parseConversationDateTime,
   validateRange,
   isWithinRange,
+  classifyConversationTime,
   hasDeliveredMarker,
   isGenericIntroText,
   isLikelyGenericIntro,
+  findMatchingOutgoingGenericIntro,
   confirmOutgoingGenericIntro,
+  resolveMessageDateTime,
+  isMessageWithinRange,
   normalizeJobDetailUrl,
   filterCandidates,
   validateDraftSelection
 } = require('../JobCopilot · AI/src/mobile-followup-core.js');
 
 const now = new Date(2026, 6, 18, 23, 0, 0);
+const nextDay = new Date(2026, 6, 19, 0, 30, 0);
 
 test('parses today, yesterday, and explicit BOSS conversation timestamps', () => {
+  assert.equal(parseConversationDateKey('昨天', nextDay), '2026-07-18');
+  assert.equal(parseConversationDateKey('今天', nextDay), '2026-07-19');
   assert.deepEqual(parseConversationDateTime('22:37', now), {
     date: '2026-07-18',
     minutes: 22 * 60 + 37,
@@ -25,6 +33,14 @@ test('parses today, yesterday, and explicit BOSS conversation timestamps', () =>
   assert.equal(parseConversationDateTime('昨天 22:37', now).date, '2026-07-17');
   assert.equal(parseConversationDateTime('07-18 22:38', now).date, '2026-07-18');
   assert.equal(parseConversationDateTime('2026-07-18 22:38', now).date, '2026-07-18');
+});
+
+test('classifies a date-only yesterday label for second-stage minute confirmation', () => {
+  const params = { date: '2026-07-18', start: '22:32', end: '22:39' };
+  assert.equal(classifyConversationTime('昨天', params, nextDay), 'date_only');
+  assert.equal(classifyConversationTime('昨天 22:38', params, nextDay), 'exact');
+  assert.equal(classifyConversationTime('今天', params, nextDay), 'none');
+  assert.equal(classifyConversationTime('昨天 21:00', params, nextDay), 'none');
 });
 
 test('validates a bounded same-day scan range', () => {
@@ -54,13 +70,27 @@ test('recognizes delivered generic introductions and excludes unrelated previews
 
 test('confirms split BOSS delivery previews against a recent self-sent message', () => {
   const preview = '您好，我是重庆大学本科生，可以做 AI Agent…';
-  assert.equal(confirmOutgoingGenericIntro(preview, [
+  const messages = [
     { text: '您好，我是重庆大学本科生，可以做 AI Agent 和 RAG 项目，希望有机会沟通。' }
-  ]), true);
+  ];
+  assert.equal(confirmOutgoingGenericIntro(preview, messages), true);
+  assert.equal(findMatchingOutgoingGenericIntro(preview, messages).text, messages[0].text);
   assert.equal(confirmOutgoingGenericIntro(preview, [
     { text: '您好，请问你什么时候方便面试？' }
   ]), false);
   assert.equal(confirmOutgoingGenericIntro('[送达]您好，我是重庆大学本科生', []), true);
+});
+
+test('resolves an exact message clock against a date-only yesterday list label', () => {
+  const params = { date: '2026-07-18', start: '22:32', end: '22:39' };
+  assert.deepEqual(resolveMessageDateTime('22:38', '昨天', nextDay), {
+    date: '2026-07-18',
+    minutes: 22 * 60 + 38,
+    clock: '22:38'
+  });
+  assert.equal(isMessageWithinRange('22:38', params, '昨天', nextDay), true);
+  assert.equal(isMessageWithinRange('22:40', params, '昨天', nextDay), false);
+  assert.equal(isMessageWithinRange('', params, '昨天', nextDay), false);
 });
 
 test('accepts only exact BOSS job-detail URLs', () => {
@@ -84,6 +114,17 @@ test('filters the mobile application batch by time and generic greeting preview'
     { id: 'three', timeText: '22:36', preview: 'HR：你好' }
   ], { date: '2026-07-18', start: '22:33', end: '22:38' }, now);
   assert.deepEqual(results.map(item => item.id), ['one', 'split-status']);
+});
+
+test('keeps yesterday previews as provisional candidates for active-chat time verification', () => {
+  const results = filterCandidates([
+    { id: 'target', timeText: '昨天', preview: '[送达]您好，我是重庆大学本科生' },
+    { id: 'wrong-day', timeText: '今天', preview: '[送达]您好，我是重庆大学本科生' },
+    { id: 'not-generic', timeText: '昨天', preview: '[送达]已经收到，谢谢' }
+  ], { date: '2026-07-18', start: '22:32', end: '22:39' }, nextDay);
+  assert.deepEqual(results.map(item => [item.id, item.timeMatchMode]), [
+    ['target', 'date_only']
+  ]);
 });
 
 test('validates exact, unique, unsent follow-up drafts', () => {

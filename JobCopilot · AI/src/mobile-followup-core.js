@@ -26,13 +26,8 @@
     return hours * 60 + minutes;
   }
 
-  function parseConversationDateTime(timeText, now) {
+  function parseConversationDateKey(timeText, now) {
     const text = cleanText(timeText);
-    const clock = text.match(/(?:^|\s)(\d{1,2}):(\d{2})(?:\s|$)/);
-    if (!clock) return null;
-    const minutes = clockMinutes(clock[1] + ':' + clock[2]);
-    if (minutes < 0) return null;
-
     now = now instanceof Date ? now : new Date();
     let date = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const fullDate = text.match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?/);
@@ -46,9 +41,22 @@
       date = new Date(now.getFullYear(), Number(shortDate[1]) - 1, Number(shortDate[2]));
     } else if (text.includes('昨天')) {
       date.setDate(date.getDate() - 1);
+    } else if (!text.includes('今天') && !/(?:^|\s)\d{1,2}:\d{2}(?:\s|$)/.test(text)) {
+      return '';
     }
+    return localDateKey(date);
+  }
+
+  function parseConversationDateTime(timeText, now) {
+    const text = cleanText(timeText);
+    const clock = text.match(/(?:^|\s)(\d{1,2}):(\d{2})(?:\s|$)/);
+    if (!clock) return null;
+    const minutes = clockMinutes(clock[1] + ':' + clock[2]);
+    if (minutes < 0) return null;
+    const date = parseConversationDateKey(text, now);
+    if (!date) return null;
     return {
-      date: localDateKey(date),
+      date: date,
       minutes: minutes,
       clock: pad(Math.floor(minutes / 60)) + ':' + pad(minutes % 60)
     };
@@ -95,6 +103,15 @@
     );
   }
 
+  function classifyConversationTime(timeText, params, now) {
+    const range = validateRange(params);
+    if (!range.ok) return 'none';
+    if (isWithinRange(timeText, params, now)) return 'exact';
+    const hasClock = /(?:^|\s)\d{1,2}:\d{2}(?:\s|$)/.test(cleanText(timeText));
+    if (!hasClock && parseConversationDateKey(timeText, now) === range.date) return 'date_only';
+    return 'none';
+  }
+
   function hasDeliveredMarker(preview) {
     return /[\[【]\s*送达\s*[\]】]/.test(cleanText(preview));
   }
@@ -128,13 +145,52 @@
     return prefix >= 8;
   }
 
+  function findMatchingOutgoingGenericIntro(preview, recentSelfMessages) {
+    if (!isGenericIntroText(preview)) return null;
+    const messages = (recentSelfMessages || []).slice().reverse();
+    return messages.find(function (message) {
+      const text = cleanText(message && (message.text || message));
+      return isGenericIntroText(text) && textsOverlap(preview, text);
+    }) || null;
+  }
+
   function confirmOutgoingGenericIntro(preview, recentSelfMessages) {
     if (!isGenericIntroText(preview)) return false;
     if (hasDeliveredMarker(preview)) return true;
-    return (recentSelfMessages || []).some(function (message) {
-      const text = cleanText(message && (message.text || message));
-      return isGenericIntroText(text) && textsOverlap(preview, text);
-    });
+    return Boolean(findMatchingOutgoingGenericIntro(preview, recentSelfMessages));
+  }
+
+  function hasExplicitDateLabel(value) {
+    const text = cleanText(value);
+    return /(?:昨天|今天)/.test(text) ||
+      /(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?/.test(text) ||
+      /(\d{1,2})月(\d{1,2})日/.test(text) ||
+      /(?:^|\s)(\d{1,2})[-/.](\d{1,2})(?:\s|$)/.test(text);
+  }
+
+  function resolveMessageDateTime(timeText, conversationTimeText, now) {
+    const parsed = parseConversationDateTime(timeText, now);
+    if (!parsed) return null;
+    if (hasExplicitDateLabel(timeText)) return parsed;
+    const conversationDate = parseConversationDateKey(conversationTimeText, now);
+    if (!conversationDate) return parsed;
+    return {
+      date: conversationDate,
+      minutes: parsed.minutes,
+      clock: parsed.clock
+    };
+  }
+
+  function isMessageWithinRange(timeText, params, conversationTimeText, now) {
+    const range = validateRange(params);
+    if (!range.ok) return false;
+    const parsed = resolveMessageDateTime(timeText, conversationTimeText, now);
+    return Boolean(
+      parsed &&
+      parsed.date === range.date &&
+      parsed.minutes >= range.start &&
+      parsed.minutes <= range.end
+    );
   }
 
   function normalizeJobDetailUrl(value, baseUrl) {
@@ -153,9 +209,12 @@
   }
 
   function filterCandidates(conversations, params, now) {
-    return (conversations || []).filter(function (conversation) {
-      return isWithinRange(conversation.timeText, params, now) &&
-        isGenericIntroText(conversation.preview);
+    return (conversations || []).map(function (conversation) {
+      return Object.assign({}, conversation, {
+        timeMatchMode: classifyConversationTime(conversation.timeText, params, now)
+      });
+    }).filter(function (conversation) {
+      return conversation.timeMatchMode !== 'none' && isGenericIntroText(conversation.preview);
     });
   }
 
@@ -207,13 +266,18 @@
     cleanText: cleanText,
     localDateKey: localDateKey,
     clockMinutes: clockMinutes,
+    parseConversationDateKey: parseConversationDateKey,
     parseConversationDateTime: parseConversationDateTime,
     validateRange: validateRange,
     isWithinRange: isWithinRange,
+    classifyConversationTime: classifyConversationTime,
     hasDeliveredMarker: hasDeliveredMarker,
     isGenericIntroText: isGenericIntroText,
     isLikelyGenericIntro: isLikelyGenericIntro,
+    findMatchingOutgoingGenericIntro: findMatchingOutgoingGenericIntro,
     confirmOutgoingGenericIntro: confirmOutgoingGenericIntro,
+    resolveMessageDateTime: resolveMessageDateTime,
+    isMessageWithinRange: isMessageWithinRange,
     normalizeJobDetailUrl: normalizeJobDetailUrl,
     filterCandidates: filterCandidates,
     validateDraftSelection: validateDraftSelection

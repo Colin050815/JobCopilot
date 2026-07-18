@@ -65,7 +65,9 @@
   function readConversationItem(item, index) {
     const rawText = clean(item.innerText || item.textContent);
     const timeTextFromElement = firstItemText(item, ['.time', '[class*="time-text"]']);
-    const timeMatch = rawText.match(/(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}|\d{1,2}月\d{1,2}日)\s+\d{1,2}:\d{2}|(?:昨天\s*)?\d{1,2}:\d{2}/);
+    const timeMatch = rawText.match(
+      /(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}|\d{1,2}月\d{1,2}日)\s+\d{1,2}:\d{2}|(?:昨天|今天)(?:\s*\d{1,2}:\d{2})?|\d{1,2}:\d{2}/
+    );
     const timeText = timeTextFromElement || (timeMatch ? timeMatch[0] : '');
     const previewText = firstItemText(item, [
       '.last-msg-text',
@@ -173,7 +175,12 @@
         element.querySelector('.message-content');
       return {
         text: clean(textElement && (textElement.innerText || textElement.textContent)),
-        timeText: firstItemText(element, ['.item-time .time', '.time']),
+        timeText: firstItemText(element, [
+          '.item-time .time',
+          '.item-time',
+          '[class*="item-time"] .time',
+          '.time'
+        ]),
         status: firstItemText(element, ['.message-status'])
       };
     }).filter(message => message.text).slice(-12);
@@ -251,14 +258,17 @@
     const core = globalThis.MobileFollowupCore;
     if (!core) return { success: false, error: '手机投递扫描组件未加载' };
     const now = new Date();
-    const inRange = all.filter(item => core.isWithinRange(item.timeText, params, now));
-    const candidates = inRange.filter(item => core.isGenericIntroText(item.preview)).slice(0, 30);
+    const timeMatches = all.map(item => core.classifyConversationTime(item.timeText, params, now));
+    const inRange = timeMatches.filter(mode => mode !== 'none');
+    const candidates = core.filterCandidates(all, params, now).slice(0, 30);
+    const dateOnlyCount = candidates.filter(item => item.timeMatchMode === 'date_only').length;
     return {
       success: true,
       conversations: candidates,
       scannedCount: all.length,
       rangeCount: inRange.length,
-      genericCount: candidates.length
+      genericCount: candidates.length,
+      dateOnlyCount: dateOnlyCount
     };
   }
 
@@ -296,11 +306,13 @@
     await sleep(500);
     let context = findActiveJobContext();
     const core = globalThis.MobileFollowupCore;
-    if (core && !core.hasDeliveredMarker(target.preview)) {
+    const needsMessageEvidence = target.timeMatchMode === 'date_only' ||
+      (core && !core.hasDeliveredMarker(target.preview));
+    if (core && needsMessageEvidence) {
       const startedAt = Date.now();
       while (
         Date.now() - startedAt < 3500 &&
-        !core.confirmOutgoingGenericIntro(target.preview, context.recentSelfMessages)
+        !core.findMatchingOutgoingGenericIntro(target.preview, context.recentSelfMessages)
       ) {
         await sleep(250);
         context = findActiveJobContext();

@@ -414,8 +414,9 @@ async function runFollowupDrafting(params) {
     if (!scan || !scan.success) throw new Error((scan && scan.error) || '会话扫描失败');
 
     const candidates = (scan.conversations || []).slice(0, 30);
-    log('聊天列表读取 ' + (scan.scannedCount || 0) + ' 条，时间范围内 ' +
-      (scan.rangeCount || 0) + ' 条，通用开场白候选 ' + candidates.length + ' 条');
+    log('聊天列表读取 ' + (scan.scannedCount || 0) + ' 条，日期/时间候选 ' +
+      (scan.rangeCount || 0) + ' 条（需点开确认分钟 ' + (scan.dateOnlyCount || 0) +
+      ' 条），通用开场白候选 ' + candidates.length + ' 条');
     if (!candidates.length) {
       state.phase = 'idle';
       pushPhase();
@@ -423,12 +424,13 @@ async function runFollowupDrafting(params) {
         return { ok: false, error: '没有读取到 BOSS 会话列表，请刷新聊天页后重试' };
       }
       if (!(scan.rangeCount || 0)) {
-        return { ok: false, error: '已读取会话，但没有找到该日期和时间范围内的会话；请适当扩大时间范围' };
+        return { ok: false, error: '已读取会话，但没有找到所选日期的会话' };
       }
-      return { ok: false, error: '时间范围内有会话，但预览不是“您好，我是…”格式的通用开场白' };
+      return { ok: false, error: '所选日期有会话，但预览不是“您好，我是…”格式的通用开场白' };
     }
 
     const drafts = [];
+    let dateOnlyOutsideRange = 0;
     progress(0, candidates.length, '生成补充草稿');
     for (let index = 0; index < candidates.length; index++) {
       if (state.aborted) break;
@@ -462,6 +464,10 @@ async function runFollowupDrafting(params) {
       conversation.hrName = context.hrName || conversation.hrName;
       conversation.position = context.position || conversation.position;
       conversation.company = context.company || conversation.company;
+      const matchingIntro = MobileFollowupCore.findMatchingOutgoingGenericIntro(
+        conversation.preview,
+        context.recentSelfMessages
+      );
       if (!MobileFollowupCore.confirmOutgoingGenericIntro(
         conversation.preview,
         context.recentSelfMessages
@@ -472,6 +478,43 @@ async function runFollowupDrafting(params) {
         }));
         progress(index + 1, candidates.length, '生成补充草稿');
         continue;
+      }
+      if (conversation.timeMatchMode === 'date_only') {
+        if (!matchingIntro || !matchingIntro.timeText) {
+          drafts.push(Object.assign({}, conversation, {
+            text: '',
+            error: '会话列表只显示“昨天”，且聊天记录未显示该开场白的准确时间，已阻止生成和发送'
+          }));
+          progress(index + 1, candidates.length, '生成补充草稿');
+          continue;
+        }
+        const resolvedTime = MobileFollowupCore.resolveMessageDateTime(
+          matchingIntro.timeText,
+          conversation.timeText,
+          new Date()
+        );
+        if (!resolvedTime) {
+          drafts.push(Object.assign({}, conversation, {
+            text: '',
+            error: '无法解析聊天记录中该开场白的准确时间，已阻止生成和发送'
+          }));
+          progress(index + 1, candidates.length, '生成补充草稿');
+          continue;
+        }
+        if (!MobileFollowupCore.isMessageWithinRange(
+          matchingIntro.timeText,
+          params,
+          conversation.timeText,
+          new Date()
+        )) {
+          dateOnlyOutsideRange++;
+          log('  开场白准确时间为 ' + resolvedTime.clock + '，不在所选范围内，已跳过', 'info');
+          progress(index + 1, candidates.length, '生成补充草稿');
+          continue;
+        }
+        conversation.timeText = resolvedTime.date + ' ' + resolvedTime.clock;
+        conversation.timeMatchMode = 'confirmed_exact';
+        log('  已从聊天记录确认准确发送时间 ' + resolvedTime.clock, 'success');
       }
       conversation.jobUrl = MobileFollowupCore.normalizeJobDetailUrl(
         context.jobUrl || conversation.jobUrl
@@ -535,6 +578,19 @@ async function runFollowupDrafting(params) {
         }));
       }
       progress(index + 1, candidates.length, '生成补充草稿');
+    }
+
+    if (!drafts.length && dateOnlyOutsideRange) {
+      await chrome.storage.local.set({
+        mobileFollowupCandidates: [],
+        mobileFollowupDrafts: []
+      });
+      state.phase = 'idle';
+      pushPhase();
+      return {
+        ok: false,
+        error: '已检查“昨天”的通用开场白，但准确发送时间均不在所选范围内'
+      };
     }
 
     await chrome.storage.local.set({
