@@ -62,6 +62,19 @@ input[type=file] { width: 100%; font-size: 12px; }
 .job-item { display: flex; gap: 8px; padding: 7px; border-bottom: 1px solid #f0f0f0; align-items: flex-start; }
 .job-item.skip { opacity: .55; }
 .job-item.processed { opacity: .62; }
+.followup-range { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: 6px; }
+.followup-range label { margin-top: 0; font-size: 11px; }
+.followup-range input { margin-top: 3px; padding: 7px 5px; font-size: 11px; }
+#btnBuildFollowups { width: 100%; margin-top: 8px; }
+.followup-draft { padding: 9px 0; border-bottom: 1px solid #eee; }
+.followup-draft:last-child { border-bottom: 0; }
+.followup-draft-head { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; font-weight: 700; }
+.followup-draft-meta { margin: 4px 0 5px 22px; color: #777; font-size: 10.5px; line-height: 1.45; }
+.followup-draft textarea { width: calc(100% - 22px); margin-left: 22px; min-height: 78px; font-size: 11.5px; line-height: 1.5; }
+.followup-draft.error { opacity: .65; }
+.followup-draft.sent { opacity: .62; }
+.followup-draft-status { margin: 4px 0 0 22px; font-size: 10.5px; color: #c92a2a; }
+.followup-draft-status.success { color: #2b8a3e; }
 .job-item input { margin-top: 3px; }
 .job-main { flex: 1; }
 .job-title { font-weight: 600; }

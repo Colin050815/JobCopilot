@@ -1,7 +1,8 @@
 // ===== BOSS自动投递 Service Worker：编排 收集→筛选→审核→投递 + MuskAI GPT-5.6 =====
-importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
+importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/mobile-followup-core.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
 const aiClient = MuskAIClient.createClient();
 const deliveryGate = JobDataCore.createDeliveryGate();
+const followupGate = JobDataCore.createDeliveryGate();
 const MAX_OCR_IMAGES = 5;
 const MAX_OCR_DATA_LENGTH = 12 * 1024 * 1024;
 const SCREEN_RESPONSE_FORMAT = {
@@ -44,7 +45,11 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const rand = (a, b) => sleep(a + Math.random() * (b - a));
 function touchActivity() { state.lastActivityAt = Date.now(); }
 function isTaskRunning() {
-  return state.phase === 'collecting' || state.phase === 'screening' || state.phase === 'delivering';
+  return state.phase === 'collecting' ||
+    state.phase === 'screening' ||
+    state.phase === 'delivering' ||
+    state.phase === 'drafting_followups' ||
+    state.phase === 'sending_followups';
 }
 function log(text, level) { touchActivity(); chrome.runtime.sendMessage({ type: 'LOG', text: text, level: level || 'info' }).catch(() => {}); }
 function pushPhase() { touchActivity(); chrome.runtime.sendMessage({ type: 'PHASE', phase: state.phase }).catch(() => {}); }
@@ -94,6 +99,21 @@ async function genGreetingFromJD(cfg, job, jd) {
   const jdText = (jd && jd.trim()) ? jd.trim() : ('技能标签：' + (job.tags || []).join('、'));
   const user = '我的简历：\n' + resumeFull(cfg) + '\n\n目标岗位：' + (job.name || '') + (job.company ? ('（' + job.company + '）') : '') + '\n该岗位JD：\n' + jdText + '\n\n请按格式生成一段招呼语，开头必须"熟悉…"，直接输出招呼语本身，不要任何多余内容。';
   const raw = await callAI(cfg, [{ role: 'system', content: sys }, { role: 'user', content: user }], 500);
+  return (raw || '').trim();
+}
+
+async function genSupplementFromJD(cfg, conversation, job, jd) {
+  const sys = '你是求职者本人。你已经在BOSS直聘给HR发送过一条通用自我介绍，现在要补发一条基于岗位JD的具体说明。回复会原样发给HR，严禁注释、标题、括号备注、字数统计或任何引导语。\n要求：1.不要重复“您好，我是某学校学生”等身份开场；2.从JD中选择2-3个与你简历真实匹配的技能或职责；3.明确提到简历中对应的项目、实践或成果，不得虚构；4.用“补充一下”或自然衔接开头；5.全文60-120字，语气真诚简洁，不要求HR立即回复。';
+  const user = '我的简历：\n' + resumeFull(cfg) +
+    '\n\n目标公司：' + (conversation.company || job.company || '未获取') +
+    '\n目标岗位：' + (job.name || conversation.position || '未获取') +
+    '\n岗位JD：\n' + String(jd || '').slice(0, 5000) +
+    '\n\n请直接输出一条可补发给该HR的具体介绍。';
+  const raw = await callAI(
+    cfg,
+    [{ role: 'system', content: sys }, { role: 'user', content: user }],
+    500
+  );
   return (raw || '').trim();
 }
 
@@ -177,6 +197,7 @@ function ocrErrorMessage(error) {
 async function ensureInjected(tabId, file) {
   const files = ['src/selectors.js'];
   if (file === 'src/content-search.js') files.push('src/job-data-core.js');
+  if (file === 'src/content-chat.js') files.push('src/mobile-followup-core.js');
   files.push(file);
   try { await chrome.scripting.executeScript({ target: { tabId: tabId }, files: files }); } catch (e) {}
 }
@@ -329,8 +350,231 @@ async function runCollect() {
   chrome.runtime.sendMessage({ type: 'SCREENED', screened: state.screened }).catch(() => {});
 }
 
+// ── 流程：为手机端刚投递的会话生成并审核补充介绍 ──
+async function readJobDetailInTab(tabId, jobUrl) {
+  const tab = await chrome.tabs.update(tabId, { url: jobUrl });
+  const loaded = await waitTabComplete(tab.id, 30000);
+  if (!loaded) return { success: false, error: '岗位详情页加载超时' };
+  await ensureInjected(tab.id, 'src/content-job-detail.js');
+  return sendToTab(tab.id, { type: 'READ_JOB_DETAIL' }, 20000);
+}
+
+async function runFollowupDrafting(params) {
+  if (!followupGate.tryStart()) return { ok: false, error: '已有手机投递补充任务正在运行' };
+  let detailTabId = null;
+  try {
+    const range = MobileFollowupCore.validateRange(params);
+    if (!range.ok) return { ok: false, error: range.error };
+    const cfg = await getCfg();
+    if (!cfg.muskApiKey) return { ok: false, error: '请先填写 MuskAI API Key' };
+    if (!resumeFull(cfg)) return { ok: false, error: '请先填写简历文字' };
+
+    state.aborted = false;
+    state.paused = false;
+    state.phase = 'drafting_followups';
+    pushPhase();
+    log('扫描手机投递会话：' + range.date + ' ' + params.start + '–' + params.end);
+
+    const chatTab = await ensureTab('https://www.zhipin.com/web/geek/chat');
+    await ensureInjected(chatTab.id, 'src/content-chat.js');
+    const scan = await sendToTab(
+      chatTab.id,
+      { type: 'SCAN_MOBILE_CONVERSATIONS', params: params },
+      90000
+    );
+    if (!scan || !scan.success) throw new Error((scan && scan.error) || '会话扫描失败');
+
+    const candidates = (scan.conversations || []).slice(0, 30);
+    log('聊天列表读取 ' + (scan.scannedCount || 0) + ' 条，符合时间和通用开场白条件 ' + candidates.length + ' 条');
+    if (!candidates.length) {
+      state.phase = 'idle';
+      pushPhase();
+      return { ok: false, error: '没有找到符合时间范围且以通用开场白送达的会话' };
+    }
+
+    const drafts = [];
+    progress(0, candidates.length, '生成补充草稿');
+    for (let index = 0; index < candidates.length; index++) {
+      if (state.aborted) break;
+      await waitIfPaused();
+      if (state.aborted) break;
+      const conversation = candidates[index];
+      log('[' + (index + 1) + '/' + candidates.length + '] ' +
+        (conversation.hrName || '未知 HR') + ' - ' +
+        (conversation.company || conversation.position || '岗位待识别'));
+
+      if (conversation.scanError) {
+        drafts.push(Object.assign({}, conversation, { text: '', error: conversation.scanError }));
+        progress(index + 1, candidates.length, '生成补充草稿');
+        continue;
+      }
+      if (!conversation.jobUrl) {
+        drafts.push(Object.assign({}, conversation, {
+          text: '',
+          error: '当前会话未读取到岗位详情链接，请在 BOSS 手动查看'
+        }));
+        progress(index + 1, candidates.length, '生成补充草稿');
+        continue;
+      }
+
+      if (!detailTabId) {
+        const detailTab = await chrome.tabs.create({ url: 'about:blank', active: false });
+        detailTabId = detailTab.id;
+      }
+      let detail;
+      try {
+        detail = await readJobDetailInTab(detailTabId, conversation.jobUrl);
+      } catch (error) {
+        detail = { success: false, error: error.message || '岗位详情读取失败' };
+      }
+      if (!detail || !detail.success || !detail.jd) {
+        drafts.push(Object.assign({}, conversation, {
+          text: '',
+          error: (detail && detail.error) || '岗位详情读取失败'
+        }));
+        progress(index + 1, candidates.length, '生成补充草稿');
+        continue;
+      }
+
+      const job = {
+        name: detail.title || conversation.position || '目标岗位',
+        company: detail.company || conversation.company || ''
+      };
+      try {
+        const text = await genSupplementFromJD(cfg, conversation, job, detail.jd);
+        drafts.push(Object.assign({}, conversation, {
+          position: job.name,
+          company: job.company,
+          text: text,
+          error: ''
+        }));
+      } catch (error) {
+        drafts.push(Object.assign({}, conversation, {
+          position: job.name,
+          company: job.company,
+          text: '',
+          error: '生成失败：' + (error.message || '未知错误')
+        }));
+      }
+      progress(index + 1, candidates.length, '生成补充草稿');
+    }
+
+    await chrome.storage.local.set({
+      mobileFollowupCandidates: candidates,
+      mobileFollowupDrafts: drafts
+    });
+    state.phase = 'followup_review';
+    pushPhase();
+    chrome.runtime.sendMessage({ type: 'MOBILE_FOLLOWUP_DRAFTS', drafts: drafts }).catch(() => {});
+    const ready = drafts.filter(item => item.text).length;
+    log('补充介绍草稿完成：可审核 ' + ready + ' / ' + drafts.length, ready ? 'success' : 'warn');
+    return { ok: true, count: ready, total: drafts.length, drafts: drafts };
+  } catch (error) {
+    state.phase = 'idle';
+    pushPhase();
+    return { ok: false, error: error.message || '补充介绍草稿生成失败' };
+  } finally {
+    if (detailTabId) chrome.tabs.remove(detailTabId).catch(() => {});
+    followupGate.finish();
+  }
+}
+
+async function runFollowupSend(selectedDrafts) {
+  if (!followupGate.tryStart()) return { ok: false, error: '已有手机投递补充任务正在运行' };
+  try {
+    const stored = await chrome.storage.local.get([
+      'mobileFollowupCandidates',
+      'mobileFollowupDrafts',
+      'mobileFollowupSent'
+    ]);
+    const candidates = stored.mobileFollowupCandidates || [];
+    const generatedDrafts = stored.mobileFollowupDrafts || [];
+    const sent = stored.mobileFollowupSent || {};
+    const validation = MobileFollowupCore.validateDraftSelection(
+      selectedDrafts,
+      candidates,
+      sent,
+      generatedDrafts
+    );
+    if (!validation.ok) return { ok: false, error: validation.error };
+
+    state.aborted = false;
+    state.paused = false;
+    state.phase = 'sending_followups';
+    pushPhase();
+    const chatTab = await ensureTab('https://www.zhipin.com/web/geek/chat');
+    await ensureInjected(chatTab.id, 'src/content-chat.js');
+    let successCount = 0;
+    let failCount = 0;
+    progress(0, validation.drafts.length, '发送补充介绍');
+
+    for (let index = 0; index < validation.drafts.length; index++) {
+      if (state.aborted) break;
+      await waitIfPaused();
+      if (state.aborted) break;
+      const draft = validation.drafts[index];
+      const target = candidates.find(item => item.id === draft.id);
+      log('[' + (index + 1) + '/' + validation.drafts.length + '] 补充给 ' +
+        ((target && target.hrName) || '未知 HR') + '...');
+      const result = await sendToTab(chatTab.id, {
+        type: 'SEND_MOBILE_FOLLOWUP',
+        target: target,
+        text: draft.text
+      }, 45000);
+
+      if (result && result.success) {
+        sent[draft.id] = 1;
+        successCount++;
+        await chrome.storage.local.set({ mobileFollowupSent: sent });
+        chrome.runtime.sendMessage({
+          type: 'MOBILE_FOLLOWUP_ITEM',
+          id: draft.id,
+          status: 'sent'
+        }).catch(() => {});
+        log('  ✓ 补充介绍已发送', 'success');
+      } else {
+        failCount++;
+        const uncertain = Boolean(result && (result.uncertain || result.timedOut));
+        if (uncertain) {
+          sent[draft.id] = 'uncertain';
+          await chrome.storage.local.set({ mobileFollowupSent: sent });
+          chrome.runtime.sendMessage({
+            type: 'MOBILE_FOLLOWUP_ITEM',
+            id: draft.id,
+            status: 'uncertain'
+          }).catch(() => {});
+          state.aborted = true;
+          log('  发送结果待确认，已锁定当前会话并停止本轮', 'error');
+        } else {
+          log('  发送失败：' + ((result && result.error) || '未知错误'), 'error');
+        }
+      }
+      progress(index + 1, validation.drafts.length, '发送补充介绍');
+      if (state.aborted) break;
+      await rand(2500, 4200);
+    }
+
+    state.phase = 'followup_review';
+    pushPhase();
+    chrome.runtime.sendMessage({
+      type: 'MOBILE_FOLLOWUP_DONE',
+      ok: successCount,
+      fail: failCount,
+      stopped: state.aborted
+    }).catch(() => {});
+    return { ok: true, sent: successCount, failed: failCount, stopped: state.aborted };
+  } catch (error) {
+    state.phase = 'followup_review';
+    pushPhase();
+    return { ok: false, error: error.message || '补充介绍发送失败' };
+  } finally {
+    followupGate.finish();
+  }
+}
+
 // ── 流程：投递（只允许一个任务；后台重新校验精确选择）──
 async function startDelivery(jobIds) {
+  if (followupGate.isActive()) return { ok: false, error: '手机投递补充任务正在运行，请先停止' };
   if (!deliveryGate.tryStart()) return { ok: false, error: '已有投递任务正在运行，已阻止重复启动' };
   try {
     const stored = await chrome.storage.local.get(['sw_jobs', 'sw_greetings', 'sw_screened', 'processed']);
@@ -513,8 +757,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === 'START_COLLECT') {
-    if (deliveryGate.isActive()) { sendResponse({ ok: false, error: '投递任务仍在运行，请先停止' }); return; }
+    if (deliveryGate.isActive() || followupGate.isActive()) { sendResponse({ ok: false, error: '发送任务仍在运行，请先停止' }); return; }
     runCollect(); sendResponse({ ok: true }); return;
+  }
+  if (msg.type === 'START_MOBILE_FOLLOWUP_DRAFTS') {
+    if (deliveryGate.isActive() || isTaskRunning()) {
+      sendResponse({ ok: false, error: '已有收集或发送任务正在运行，请先停止' });
+      return;
+    }
+    runFollowupDrafting(msg.params || {}).then(sendResponse);
+    return true;
+  }
+  if (msg.type === 'START_MOBILE_FOLLOWUP_SEND') {
+    if (deliveryGate.isActive() || isTaskRunning()) {
+      sendResponse({ ok: false, error: '已有收集或发送任务正在运行，请先停止' });
+      return;
+    }
+    runFollowupSend(msg.drafts || []).then(sendResponse);
+    return true;
   }
   if (msg.type === 'START_DELIVER') {
     startDelivery(msg.jobIds).then(sendResponse);
@@ -524,7 +784,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'RESUME') { state.paused = false; log('继续', 'info'); sendResponse({ ok: true }); return; }
   if (msg.type === 'STOP') { state.aborted = true; state.paused = false; log('已停止', 'warn'); state.phase = 'idle'; pushPhase(); sendResponse({ ok: true }); return; }
   if (msg.type === 'RESET') {
-    if (deliveryGate.isActive()) { sendResponse({ ok: false, error: '投递任务仍在运行，不能重置' }); return; }
+    if (deliveryGate.isActive() || followupGate.isActive()) { sendResponse({ ok: false, error: '发送任务仍在运行，不能重置' }); return; }
     state.processed = {};
     chrome.storage.local.set({ processed: {} });
     chrome.storage.local.remove(['sw_jobs', 'sw_greetings', 'sw_screened']);
@@ -537,6 +797,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       paused: state.paused,
       screened: state.screened,
       deliveryActive: deliveryGate.isActive(),
+      followupActive: followupGate.isActive(),
       lastActivityAt: state.lastActivityAt
     });
     return;
@@ -554,6 +815,7 @@ chrome.runtime.onConnect.addListener(port => {
         phase: state.phase,
         paused: state.paused,
         deliveryActive: deliveryGate.isActive(),
+        followupActive: followupGate.isActive(),
         lastActivityAt: state.lastActivityAt
       });
     } catch (error) {}

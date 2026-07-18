@@ -89,6 +89,36 @@
     </div>
   </section>
 
+  <!-- 手机端投递补充 -->
+  <section class="card" id="mobileFollowupCard">
+    <div class="card-h" data-toggle="mobileFollowupBody">
+      <span>④ 手机投递补充</span><span>▾</span>
+    </div>
+    <div class="card-b" id="mobileFollowupBody">
+      <div class="followup-range">
+        <label>投递日期
+          <input type="date" id="followupDate">
+        </label>
+        <label>开始时间
+          <input type="time" id="followupStart">
+        </label>
+        <label>结束时间
+          <input type="time" id="followupEnd">
+        </label>
+      </div>
+      <div class="privacy-note">只扫描该时间段内预览以“[送达]您好，我是…”开头的会话。先读取 JD 并生成草稿，不会自动发送。</div>
+      <button class="btn-secondary" id="btnBuildFollowups">扫描会话 + 生成草稿</button>
+      <div id="followupStatus" class="parse-status">请填写手机端投递的准确时间范围。</div>
+      <div id="followupReview" hidden>
+        <div class="review-tools">
+          <label class="mini"><input type="checkbox" id="selAllFollowups" checked> 全选可发送</label>
+          <button class="btn-go" id="btnSendFollowups">确认发送选中</button>
+        </div>
+        <div id="followupDraftList"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- 日志 -->
   <section class="card">
     <div class="card-h"><span>日志</span><button class="mini-btn" id="clearLog">清空</button></div>

@@ -11,6 +11,8 @@ let keepAliveReconnectTimer = null;
 let keepAliveExpected = false;
 let backendActiveSeen = false;
 let backendLossReported = false;
+let mobileFollowupDrafts = [];
+let mobileFollowupSent = {};
 
 // 折叠
 document.querySelectorAll('.card-h[data-toggle]').forEach(h => {
@@ -21,16 +23,41 @@ document.querySelectorAll('.card-h[data-toggle]').forEach(h => {
 });
 
 // 载入配置
-chrome.storage.local.get(CFG_FIELDS.concat(['resumeImage', 'resumeImages', 'processed', 'sw_screened']), (d) => {
+chrome.storage.local.get(CFG_FIELDS.concat([
+  'resumeImage',
+  'resumeImages',
+  'processed',
+  'sw_screened',
+  'mobileFollowupDrafts',
+  'mobileFollowupSent'
+]), (d) => {
   CFG_FIELDS.forEach(f => { if (d[f] !== undefined && $(f)) $(f).value = d[f]; });
   if (!d.gptModel) $('gptModel').value = DEFAULT_MODEL;
   processedJobs = d.processed || {};
+  mobileFollowupDrafts = Array.isArray(d.mobileFollowupDrafts) ? d.mobileFollowupDrafts : [];
+  mobileFollowupSent = d.mobileFollowupSent || {};
   const images = Array.isArray(d.resumeImages) && d.resumeImages.length
     ? d.resumeImages
     : (d.resumeImage ? [d.resumeImage] : []);
   if (images.length) showImages(images);
   if (Array.isArray(d.sw_screened) && d.sw_screened.length) renderReview(d.sw_screened);
+  if (mobileFollowupDrafts.length) renderFollowupDrafts(mobileFollowupDrafts);
 });
+
+function localDateInput(date) {
+  return date.getFullYear() + '-' +
+    String(date.getMonth() + 1).padStart(2, '0') + '-' +
+    String(date.getDate()).padStart(2, '0');
+}
+function localTimeInput(date) {
+  return String(date.getHours()).padStart(2, '0') + ':' +
+    String(date.getMinutes()).padStart(2, '0');
+}
+const followupNow = new Date();
+const followupStartDefault = new Date(followupNow.getTime() - 10 * 60 * 1000);
+$('followupDate').value = localDateInput(followupNow);
+$('followupStart').value = localTimeInput(followupStartDefault);
+$('followupEnd').value = localTimeInput(followupNow);
 
 function showImages(images) {
   const preview = $('imgPrev');
@@ -242,6 +269,123 @@ $('btnTestAI').addEventListener('click', async () => {
   }
 });
 
+function setFollowupStatus(text, level) {
+  const status = $('followupStatus');
+  status.textContent = text;
+  status.className = 'parse-status' + (level ? ' ' + level : '');
+}
+
+function followupRecipient(draft) {
+  return [draft.hrName, draft.company, draft.position].filter(Boolean).join(' · ') || draft.id;
+}
+
+function renderFollowupDrafts(drafts) {
+  mobileFollowupDrafts = Array.isArray(drafts) ? drafts : [];
+  const list = $('followupDraftList');
+  let html = '';
+  mobileFollowupDrafts.forEach(draft => {
+    const sentState = mobileFollowupSent[draft.id];
+    const unavailable = !draft.text || Boolean(draft.error) || Boolean(sentState);
+    const statusText = sentState === 'uncertain'
+      ? '发送结果待确认，已锁定，请在 BOSS 手动核实'
+      : (sentState ? '已发送，本轮不会重复' : (draft.error || ''));
+    html += '<div class="followup-draft' +
+      (draft.error ? ' error' : '') +
+      (sentState ? ' sent' : '') +
+      '" data-id="' + esc(draft.id) + '">' +
+      '<div class="followup-draft-head"><input class="followup-select" type="checkbox" ' +
+      (unavailable ? 'disabled ' : 'checked ') +
+      'data-id="' + esc(draft.id) + '"><span>' + esc(followupRecipient(draft)) + '</span></div>' +
+      '<div class="followup-draft-meta">' + esc((draft.timeText || '') + '｜原消息：' + (draft.preview || '未获取')) + '</div>' +
+      '<textarea class="followup-text" data-id="' + esc(draft.id) + '" ' +
+      (unavailable ? 'disabled' : '') + '>' + esc(draft.text || '') + '</textarea>' +
+      (statusText ? '<div class="followup-draft-status' + (sentState === 1 ? ' success' : '') + '">' +
+        esc(statusText) + '</div>' : '') +
+      '</div>';
+  });
+  list.innerHTML = html || '<div class="job-sub">暂无补充介绍草稿</div>';
+  $('followupReview').hidden = false;
+  const ready = mobileFollowupDrafts.filter(draft => draft.text && !draft.error && !mobileFollowupSent[draft.id]).length;
+  setFollowupStatus('草稿 ' + mobileFollowupDrafts.length + ' 条，可发送 ' + ready + ' 条。请逐条检查并修改。', ready ? 'success' : 'warn');
+}
+
+$('btnBuildFollowups').addEventListener('click', async () => {
+  await saveCfgSync();
+  if (!$('muskApiKey').value.trim()) return setFollowupStatus('请先填写 MuskAI API Key', 'error');
+  if (!$('resumeText').value.trim()) return setFollowupStatus('请先填写简历文字', 'error');
+  const params = {
+    date: $('followupDate').value,
+    start: $('followupStart').value,
+    end: $('followupEnd').value
+  };
+  setRunning(true);
+  setFollowupStatus('正在只读扫描会话、读取岗位 JD 并生成草稿，不会发送消息…', 'warn');
+  try {
+    const result = await sendRuntimeMessage({
+      type: 'START_MOBILE_FOLLOWUP_DRAFTS',
+      params: params
+    });
+    if (!result || !result.ok) throw new Error((result && result.error) || '补充介绍草稿生成失败');
+    mobileFollowupDrafts = result.drafts || [];
+    renderFollowupDrafts(mobileFollowupDrafts);
+  } catch (error) {
+    setFollowupStatus(error.message || '补充介绍草稿生成失败', 'error');
+    addLog(error.message || '补充介绍草稿生成失败', 'error');
+  } finally {
+    setRunning(false);
+  }
+});
+
+$('selAllFollowups').addEventListener('change', event => {
+  document.querySelectorAll('.followup-select:not(:disabled)').forEach(input => {
+    input.checked = event.target.checked;
+  });
+});
+
+$('btnSendFollowups').addEventListener('click', async () => {
+  const checked = Array.from(document.querySelectorAll('.followup-select:checked:not(:disabled)'));
+  const drafts = checked.map(input => {
+    const text = Array.from(document.querySelectorAll('.followup-text'))
+      .find(item => item.dataset.id === input.dataset.id);
+    return { id: input.dataset.id, text: text ? text.value.trim() : '' };
+  });
+  if (!drafts.length) return setFollowupStatus('请至少选择一条补充介绍', 'error');
+  const names = checked.map(input => {
+    const draft = mobileFollowupDrafts.find(item => item.id === input.dataset.id);
+    return '• ' + followupRecipient(draft || { id: input.dataset.id });
+  });
+  if (!confirm(
+    '确认向以下 ' + drafts.length + ' 个现有会话发送补充介绍？\n\n' +
+    names.join('\n') +
+    '\n\n这是实际发送操作，确认后将逐条发送。'
+  )) return;
+
+  drafts.forEach(edited => {
+    const draft = mobileFollowupDrafts.find(item => item.id === edited.id);
+    if (draft) draft.text = edited.text;
+  });
+  chrome.storage.local.set({ mobileFollowupDrafts: mobileFollowupDrafts });
+  setRunning(true);
+  setFollowupStatus('正在发送选中的补充介绍，请保持侧边栏开启…', 'warn');
+  try {
+    const result = await sendRuntimeMessage({
+      type: 'START_MOBILE_FOLLOWUP_SEND',
+      drafts: drafts
+    });
+    if (!result || !result.ok) throw new Error((result && result.error) || '补充介绍发送失败');
+    setFollowupStatus(
+      '发送完成：成功 ' + result.sent + '，失败 ' + result.failed +
+      (result.stopped ? '；已安全停止' : ''),
+      result.failed ? 'warn' : 'success'
+    );
+  } catch (error) {
+    setFollowupStatus(error.message || '补充介绍发送失败', 'error');
+    addLog(error.message || '补充介绍发送失败', 'error');
+  } finally {
+    setRunning(false);
+  }
+});
+
 // 运行控制
 $('btnCollect').addEventListener('click', async () => {
   await saveCfgSync();
@@ -310,8 +454,14 @@ $('selAll').addEventListener('change', (e) => {
   document.querySelectorAll('.job-item:not(.skip) input:not(:disabled)').forEach(c => c.checked = e.target.checked);
 });
 
-function isBackendRunning(phase, deliveryActive) {
-  return deliveryActive === true || phase === 'collecting' || phase === 'screening' || phase === 'delivering';
+function isBackendRunning(phase, deliveryActive, followupActive) {
+  return deliveryActive === true ||
+    followupActive === true ||
+    phase === 'collecting' ||
+    phase === 'screening' ||
+    phase === 'delivering' ||
+    phase === 'drafting_followups' ||
+    phase === 'sending_followups';
 }
 function stopKeepAlive() {
   keepAliveExpected = false;
@@ -339,7 +489,7 @@ function startKeepAlive() {
     };
     port.onMessage.addListener(message => {
       if (!message || message.type !== 'STATE') return;
-      const active = isBackendRunning(message.phase, message.deliveryActive);
+      const active = isBackendRunning(message.phase, message.deliveryActive, message.followupActive);
       if (active) {
         backendActiveSeen = true;
         backendLossReported = false;
@@ -372,6 +522,11 @@ function setRunning(running) {
   $('btnPause').disabled = !running;
   $('btnStop').disabled = !running;
   $('btnDeliver').disabled = running || deliverySubmitPending;
+  $('btnBuildFollowups').disabled = running;
+  $('btnSendFollowups').disabled = running;
+  $('followupDate').disabled = running;
+  $('followupStart').disabled = running;
+  $('followupEnd').disabled = running;
   if (!running) $('btnPause').textContent = '暂停';
   if (running) startKeepAlive();
   else stopKeepAlive();
@@ -425,12 +580,22 @@ function renderJobMeta(job) {
 function esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // 消息接收
-function applyPhase(phase, deliveryActive) {
-  const map = { idle: '未开始', collecting: '收集中', screening: 'AI筛选中', review: '待审核', delivering: '投递中', done: '已完成' };
+function applyPhase(phase, deliveryActive, followupActive) {
+  const map = {
+    idle: '未开始',
+    collecting: '收集中',
+    screening: 'AI筛选中',
+    review: '待审核',
+    delivering: '投递中',
+    drafting_followups: '生成补充草稿中',
+    followup_review: '补充草稿待审核',
+    sending_followups: '发送补充介绍中',
+    done: '已完成'
+  };
   $('phaseText').textContent = map[phase] || phase;
   const isDelivering = deliveryActive === true || phase === 'delivering';
   setDeliveryActive(isDelivering);
-  setRunning(isDelivering || phase === 'collecting' || phase === 'screening');
+  setRunning(isBackendRunning(phase, deliveryActive, followupActive));
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
@@ -438,6 +603,18 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'PROGRESS') $('progText').textContent = (msg.label ? msg.label + ' ' : '') + msg.cur + '/' + msg.total;
   if (msg.type === 'PHASE') applyPhase(msg.phase);
   if (msg.type === 'SCREENED') renderReview(msg.screened);
+  if (msg.type === 'MOBILE_FOLLOWUP_DRAFTS') renderFollowupDrafts(msg.drafts || []);
+  if (msg.type === 'MOBILE_FOLLOWUP_ITEM') {
+    mobileFollowupSent[msg.id] = msg.status === 'uncertain' ? 'uncertain' : 1;
+    renderFollowupDrafts(mobileFollowupDrafts);
+  }
+  if (msg.type === 'MOBILE_FOLLOWUP_DONE') {
+    setRunning(false);
+    setFollowupStatus(
+      '发送完成：成功 ' + msg.ok + '，失败 ' + msg.fail + (msg.stopped ? '；已安全停止' : ''),
+      msg.fail ? 'warn' : 'success'
+    );
+  }
   if (msg.type === 'DELIVERY_ITEM' && (msg.ok || msg.status === 'uncertain')) {
     const status = msg.status === 'uncertain' ? 'uncertain' : 1;
     processedJobs[msg.id] = status;
@@ -461,8 +638,8 @@ chrome.runtime.onMessage.addListener((msg) => {
 sendRuntimeMessage({ type: 'GET_STATE' }).then(current => {
   if (!current) return;
   if (current.screened && current.screened.length) renderReview(current.screened);
-  applyPhase(current.phase || 'idle', current.deliveryActive);
-  if (current.paused && isBackendRunning(current.phase, current.deliveryActive)) {
+  applyPhase(current.phase || 'idle', current.deliveryActive, current.followupActive);
+  if (current.paused && isBackendRunning(current.phase, current.deliveryActive, current.followupActive)) {
     $('btnPause').textContent = '继续';
   }
 }).catch(() => {});
