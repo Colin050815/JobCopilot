@@ -91,6 +91,20 @@
     return { ok: true, date: date, start: start, end: end };
   }
 
+  function validateScanParams(params) {
+    params = params || {};
+    const mode = cleanText(params.mode) === 'count' ? 'count' : 'range';
+    if (mode === 'count') {
+      const count = Number(params.count);
+      if (!Number.isInteger(count) || count < 1 || count > 50) {
+        return { ok: false, mode: mode, error: '会话数量需为 1–50 的整数' };
+      }
+      return { ok: true, mode: mode, count: count };
+    }
+    const range = validateRange(params);
+    return Object.assign({ mode: mode }, range);
+  }
+
   function isWithinRange(timeText, params, now) {
     const range = validateRange(params);
     if (!range.ok) return false;
@@ -154,6 +168,12 @@
     }) || null;
   }
 
+  function findRecentOutgoingGenericIntro(recentSelfMessages) {
+    return (recentSelfMessages || []).slice().reverse().find(function (message) {
+      return isGenericIntroText(message && (message.text || message));
+    }) || null;
+  }
+
   function confirmOutgoingGenericIntro(preview, recentSelfMessages) {
     if (!isGenericIntroText(preview)) return false;
     if (hasDeliveredMarker(preview)) return true;
@@ -209,6 +229,13 @@
   }
 
   function filterCandidates(conversations, params, now) {
+    const scan = validateScanParams(params);
+    if (!scan.ok) return [];
+    if (scan.mode === 'count') {
+      return (conversations || []).slice(0, scan.count).map(function (conversation) {
+        return Object.assign({}, conversation, { timeMatchMode: 'count' });
+      });
+    }
     return (conversations || []).map(function (conversation) {
       return Object.assign({}, conversation, {
         timeMatchMode: classifyConversationTime(conversation.timeText, params, now)
@@ -269,12 +296,14 @@
     parseConversationDateKey: parseConversationDateKey,
     parseConversationDateTime: parseConversationDateTime,
     validateRange: validateRange,
+    validateScanParams: validateScanParams,
     isWithinRange: isWithinRange,
     classifyConversationTime: classifyConversationTime,
     hasDeliveredMarker: hasDeliveredMarker,
     isGenericIntroText: isGenericIntroText,
     isLikelyGenericIntro: isLikelyGenericIntro,
     findMatchingOutgoingGenericIntro: findMatchingOutgoingGenericIntro,
+    findRecentOutgoingGenericIntro: findRecentOutgoingGenericIntro,
     confirmOutgoingGenericIntro: confirmOutgoingGenericIntro,
     resolveMessageDateTime: resolveMessageDateTime,
     isMessageWithinRange: isMessageWithinRange,

@@ -5,12 +5,14 @@ const {
   parseConversationDateKey,
   parseConversationDateTime,
   validateRange,
+  validateScanParams,
   isWithinRange,
   classifyConversationTime,
   hasDeliveredMarker,
   isGenericIntroText,
   isLikelyGenericIntro,
   findMatchingOutgoingGenericIntro,
+  findRecentOutgoingGenericIntro,
   confirmOutgoingGenericIntro,
   resolveMessageDateTime,
   isMessageWithinRange,
@@ -50,6 +52,23 @@ test('validates a bounded same-day scan range', () => {
   assert.equal(validateRange({ date: '2026-07-18', start: '18:00', end: '22:00' }).ok, false);
 });
 
+test('validates a configurable recent-conversation count', () => {
+  assert.deepEqual(validateScanParams({ mode: 'count', count: 28 }), {
+    ok: true,
+    mode: 'count',
+    count: 28
+  });
+  assert.equal(validateScanParams({ mode: 'count', count: 0 }).ok, false);
+  assert.equal(validateScanParams({ mode: 'count', count: 51 }).ok, false);
+  assert.equal(validateScanParams({ mode: 'count', count: 2.5 }).ok, false);
+  assert.equal(validateScanParams({
+    mode: 'range',
+    date: '2026-07-18',
+    start: '22:32',
+    end: '22:39'
+  }).ok, true);
+});
+
 test('matches only messages inside the requested date and minute range', () => {
   const params = { date: '2026-07-18', start: '22:33', end: '22:38' };
   assert.equal(isWithinRange('22:33', params, now), true);
@@ -75,6 +94,10 @@ test('confirms split BOSS delivery previews against a recent self-sent message',
   ];
   assert.equal(confirmOutgoingGenericIntro(preview, messages), true);
   assert.equal(findMatchingOutgoingGenericIntro(preview, messages).text, messages[0].text);
+  assert.equal(findRecentOutgoingGenericIntro([
+    { text: 'HR 回复：方便沟通吗？' },
+    { text: '您好，我是重庆大学本科生，希望有机会进一步沟通。', timeText: '22:38' }
+  ]).timeText, '22:38');
   assert.equal(confirmOutgoingGenericIntro(preview, [
     { text: '您好，请问你什么时候方便面试？' }
   ]), false);
@@ -124,6 +147,18 @@ test('keeps yesterday previews as provisional candidates for active-chat time ve
   ], { date: '2026-07-18', start: '22:32', end: '22:39' }, nextDay);
   assert.deepEqual(results.map(item => [item.id, item.timeMatchMode]), [
     ['target', 'date_only']
+  ]);
+});
+
+test('takes exactly the first N list conversations before active-chat verification', () => {
+  const results = filterCandidates([
+    { id: 'first', timeText: '昨天', preview: 'HR 已回复' },
+    { id: 'second', timeText: '昨天', preview: '[送达]您好，我是重庆大学本科生' },
+    { id: 'third', timeText: '昨天', preview: '[送达]您好，我是重庆大学本科生' }
+  ], { mode: 'count', count: 2 }, nextDay);
+  assert.deepEqual(results.map(item => [item.id, item.timeMatchMode]), [
+    ['first', 'count'],
+    ['second', 'count']
   ]);
 });
 

@@ -62,9 +62,11 @@ input[type=file] { width: 100%; font-size: 12px; }
 .job-item { display: flex; gap: 8px; padding: 7px; border-bottom: 1px solid #f0f0f0; align-items: flex-start; }
 .job-item.skip { opacity: .55; }
 .job-item.processed { opacity: .62; }
-.followup-range { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: 6px; }
-.followup-range label { margin-top: 0; font-size: 11px; }
-.followup-range input { margin-top: 3px; padding: 7px 5px; font-size: 11px; }
+.followup-mode { display: grid; grid-template-columns: 1.45fr 1fr; gap: 6px; }
+.followup-mode label, .followup-range label { margin-top: 0; font-size: 11px; }
+.followup-mode input, .followup-mode select, .followup-range input { margin-top: 3px; padding: 7px 5px; font-size: 11px; }
+.followup-range { display: grid; grid-template-columns: 1.35fr 1fr 1fr; gap: 6px; margin-top: 7px; }
+.followup-range[hidden], #followupCountWrap[hidden] { display: none; }
 #btnBuildFollowups { width: 100%; margin-top: 8px; }
 .followup-draft { padding: 9px 0; border-bottom: 1px solid #eee; }
 .followup-draft:last-child { border-bottom: 0; }

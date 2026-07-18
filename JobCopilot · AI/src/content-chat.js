@@ -257,6 +257,22 @@
     const all = getConversationItems().slice(0, 100).map(readConversationItem);
     const core = globalThis.MobileFollowupCore;
     if (!core) return { success: false, error: '手机投递扫描组件未加载' };
+    const scanConfig = core.validateScanParams(params);
+    if (!scanConfig.ok) return { success: false, error: scanConfig.error };
+    if (scanConfig.mode === 'count') {
+      const candidates = core.filterCandidates(all, params, new Date());
+      return {
+        success: true,
+        scanMode: 'count',
+        conversations: candidates,
+        scannedCount: all.length,
+        inspectedCount: Math.min(scanConfig.count, all.length),
+        requestedCount: scanConfig.count,
+        rangeCount: 0,
+        genericCount: 0,
+        dateOnlyCount: 0
+      };
+    }
     const now = new Date();
     const timeMatches = all.map(item => core.classifyConversationTime(item.timeText, params, now));
     const inRange = timeMatches.filter(mode => mode !== 'none');
@@ -264,6 +280,7 @@
     const dateOnlyCount = candidates.filter(item => item.timeMatchMode === 'date_only').length;
     return {
       success: true,
+      scanMode: 'range',
       conversations: candidates,
       scannedCount: all.length,
       rangeCount: inRange.length,
@@ -307,13 +324,14 @@
     let context = findActiveJobContext();
     const core = globalThis.MobileFollowupCore;
     const needsMessageEvidence = target.timeMatchMode === 'date_only' ||
+      target.timeMatchMode === 'count' ||
       (core && !core.hasDeliveredMarker(target.preview));
     if (core && needsMessageEvidence) {
       const startedAt = Date.now();
-      while (
-        Date.now() - startedAt < 3500 &&
-        !core.findMatchingOutgoingGenericIntro(target.preview, context.recentSelfMessages)
-      ) {
+      const hasEvidence = () => target.timeMatchMode === 'count'
+        ? Boolean(core.findRecentOutgoingGenericIntro(context.recentSelfMessages))
+        : Boolean(core.findMatchingOutgoingGenericIntro(target.preview, context.recentSelfMessages));
+      while (Date.now() - startedAt < 3500 && !hasEvidence()) {
         await sleep(250);
         context = findActiveJobContext();
       }

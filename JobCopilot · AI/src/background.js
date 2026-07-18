@@ -392,8 +392,8 @@ async function runFollowupDrafting(params) {
   if (!followupGate.tryStart()) return { ok: false, error: '已有手机投递补充任务正在运行' };
   let detailTabId = null;
   try {
-    const range = MobileFollowupCore.validateRange(params);
-    if (!range.ok) return { ok: false, error: range.error };
+    const scanConfig = MobileFollowupCore.validateScanParams(params);
+    if (!scanConfig.ok) return { ok: false, error: scanConfig.error };
     const cfg = await getCfg();
     if (!cfg.muskApiKey) return { ok: false, error: '请先填写 MuskAI API Key' };
     if (!resumeFull(cfg)) return { ok: false, error: '请先填写简历文字' };
@@ -402,7 +402,11 @@ async function runFollowupDrafting(params) {
     state.paused = false;
     state.phase = 'drafting_followups';
     pushPhase();
-    log('扫描手机投递会话：' + range.date + ' ' + params.start + '–' + params.end);
+    if (scanConfig.mode === 'count') {
+      log('扫描会话列表最前面的 ' + scanConfig.count + ' 条会话');
+    } else {
+      log('扫描手机投递会话：' + scanConfig.date + ' ' + params.start + '–' + params.end);
+    }
 
     const chatTab = await ensureTab('https://www.zhipin.com/web/geek/chat');
     await ensureInjected(chatTab.id, 'src/content-chat.js');
@@ -413,15 +417,23 @@ async function runFollowupDrafting(params) {
     );
     if (!scan || !scan.success) throw new Error((scan && scan.error) || '会话扫描失败');
 
-    const candidates = (scan.conversations || []).slice(0, 30);
-    log('聊天列表读取 ' + (scan.scannedCount || 0) + ' 条，日期/时间候选 ' +
-      (scan.rangeCount || 0) + ' 条（需点开确认分钟 ' + (scan.dateOnlyCount || 0) +
-      ' 条），通用开场白候选 ' + candidates.length + ' 条');
+    const candidates = (scan.conversations || []).slice(0, 50);
+    if (scanConfig.mode === 'count') {
+      log('聊天列表读取 ' + (scan.scannedCount || 0) + ' 条，将检查最前面的 ' +
+        (scan.inspectedCount || 0) + ' 条');
+    } else {
+      log('聊天列表读取 ' + (scan.scannedCount || 0) + ' 条，日期/时间候选 ' +
+        (scan.rangeCount || 0) + ' 条（需点开确认分钟 ' + (scan.dateOnlyCount || 0) +
+        ' 条），通用开场白候选 ' + candidates.length + ' 条');
+    }
     if (!candidates.length) {
       state.phase = 'idle';
       pushPhase();
       if (!(scan.scannedCount || 0)) {
         return { ok: false, error: '没有读取到 BOSS 会话列表，请刷新聊天页后重试' };
+      }
+      if (scanConfig.mode === 'count') {
+        return { ok: false, error: '没有读取到可检查的最近会话' };
       }
       if (!(scan.rangeCount || 0)) {
         return { ok: false, error: '已读取会话，但没有找到所选日期的会话' };
@@ -464,11 +476,24 @@ async function runFollowupDrafting(params) {
       conversation.hrName = context.hrName || conversation.hrName;
       conversation.position = context.position || conversation.position;
       conversation.company = context.company || conversation.company;
-      const matchingIntro = MobileFollowupCore.findMatchingOutgoingGenericIntro(
-        conversation.preview,
-        context.recentSelfMessages
-      );
-      if (!MobileFollowupCore.confirmOutgoingGenericIntro(
+      const matchingIntro = conversation.timeMatchMode === 'count'
+        ? MobileFollowupCore.findRecentOutgoingGenericIntro(context.recentSelfMessages)
+        : MobileFollowupCore.findMatchingOutgoingGenericIntro(
+          conversation.preview,
+          context.recentSelfMessages
+        );
+      if (conversation.timeMatchMode === 'count' && !matchingIntro) {
+        drafts.push(Object.assign({}, conversation, {
+          text: '',
+          error: '该会话最近记录中未找到你发送的通用开场白，已跳过'
+        }));
+        progress(index + 1, candidates.length, '生成补充草稿');
+        continue;
+      }
+      if (conversation.timeMatchMode === 'count' && matchingIntro.text) {
+        conversation.preview = matchingIntro.text;
+      }
+      if (conversation.timeMatchMode !== 'count' && !MobileFollowupCore.confirmOutgoingGenericIntro(
         conversation.preview,
         context.recentSelfMessages
       )) {
@@ -478,6 +503,13 @@ async function runFollowupDrafting(params) {
         }));
         progress(index + 1, candidates.length, '生成补充草稿');
         continue;
+      }
+      if (conversation.timeMatchMode === 'count' && matchingIntro.timeText) {
+        const listTime = String(conversation.timeText || '').trim();
+        const messageTime = String(matchingIntro.timeText || '').trim();
+        conversation.timeText = listTime && !listTime.includes(messageTime)
+          ? listTime + ' ' + messageTime
+          : (listTime || messageTime);
       }
       if (conversation.timeMatchMode === 'date_only') {
         if (!matchingIntro || !matchingIntro.timeText) {

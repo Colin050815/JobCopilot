@@ -1,6 +1,15 @@
 // ===== 侧边栏交互 =====
 const $ = (id) => document.getElementById(id);
-const CFG_FIELDS = ['muskApiKey', 'gptModel', 'resumeText', 'keyword', 'city', 'count'];
+const CFG_FIELDS = [
+  'muskApiKey',
+  'gptModel',
+  'resumeText',
+  'keyword',
+  'city',
+  'count',
+  'followupScanMode',
+  'followupConversationCount'
+];
 const DEFAULT_MODEL = 'gpt-5.6-terra';
 let selectedResumeFile = null;
 let deliverySubmitPending = false;
@@ -33,6 +42,7 @@ chrome.storage.local.get(CFG_FIELDS.concat([
 ]), (d) => {
   CFG_FIELDS.forEach(f => { if (d[f] !== undefined && $(f)) $(f).value = d[f]; });
   if (!d.gptModel) $('gptModel').value = DEFAULT_MODEL;
+  updateFollowupScanMode();
   processedJobs = d.processed || {};
   mobileFollowupDrafts = Array.isArray(d.mobileFollowupDrafts) ? d.mobileFollowupDrafts : [];
   mobileFollowupSent = d.mobileFollowupSent || {};
@@ -58,6 +68,27 @@ const followupStartDefault = new Date(followupNow.getTime() - 10 * 60 * 1000);
 $('followupDate').value = localDateInput(followupNow);
 $('followupStart').value = localTimeInput(followupStartDefault);
 $('followupEnd').value = localTimeInput(followupNow);
+$('followupScanMode').value = 'count';
+$('followupConversationCount').value = '28';
+
+function updateFollowupScanMode() {
+  const countMode = $('followupScanMode').value === 'count';
+  $('followupCountWrap').hidden = !countMode;
+  $('followupRangeFields').hidden = countMode;
+  $('followupPrivacyNote').textContent = countMode
+    ? '检查列表最前面的 N 条会话，逐条确认你发送过通用开场白，再读取 JD 并生成草稿，不会自动发送。'
+    : '只扫描所选时间段内的通用开场白。列表只显示“昨天”时会点开确认准确分钟。先读取 JD 并生成草稿，不会自动发送。';
+}
+
+$('followupScanMode').addEventListener('change', () => {
+  updateFollowupScanMode();
+  setFollowupStatus(
+    $('followupScanMode').value === 'count'
+      ? '请输入要检查的列表会话数量（1–50）。'
+      : '请填写手机端投递的准确日期和时间范围。'
+  );
+});
+updateFollowupScanMode();
 
 function showImages(images) {
   const preview = $('imgPrev');
@@ -314,6 +345,8 @@ $('btnBuildFollowups').addEventListener('click', async () => {
   if (!$('muskApiKey').value.trim()) return setFollowupStatus('请先填写 MuskAI API Key', 'error');
   if (!$('resumeText').value.trim()) return setFollowupStatus('请先填写简历文字', 'error');
   const params = {
+    mode: $('followupScanMode').value,
+    count: Number($('followupConversationCount').value),
     date: $('followupDate').value,
     start: $('followupStart').value,
     end: $('followupEnd').value
@@ -530,6 +563,8 @@ function setRunning(running) {
   $('followupDate').disabled = running;
   $('followupStart').disabled = running;
   $('followupEnd').disabled = running;
+  $('followupScanMode').disabled = running;
+  $('followupConversationCount').disabled = running;
   if (!running) $('btnPause').textContent = '暂停';
   if (running) startKeepAlive();
   else stopKeepAlive();
