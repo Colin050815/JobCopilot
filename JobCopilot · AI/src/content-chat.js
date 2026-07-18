@@ -163,8 +163,10 @@
       '.top-info-content .company-name'
     ]);
     const detailTrigger = [
+      '.chat-position-content [ka="geek_chat_job_detail"] .right-content',
+      '[ka="geek_chat_job_detail"] .right-content',
       '[ka="geek_chat_job_detail"]',
-      '.chat-position-content .position-content .right-content',
+      '.chat-position-content .position-content > .right-content',
       '.chat-position-content .position-content'
     ].map(selector => root.querySelector(selector)).find(isVisible);
     const recentSelfMessages = Array.from(root.querySelectorAll(

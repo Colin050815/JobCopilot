@@ -10,8 +10,10 @@
   async function captureJobDetailUrlInPage(options) {
     const root = document.querySelector('.chat-conversation') || document;
     const selectors = [
+      '.chat-position-content [ka="geek_chat_job_detail"] .right-content',
+      '[ka="geek_chat_job_detail"] .right-content',
       '[ka="geek_chat_job_detail"]',
-      '.chat-position-content .position-content .right-content',
+      '.chat-position-content .position-content > .right-content',
       '.chat-position-content .position-content'
     ];
     const trigger = selectors
@@ -40,29 +42,73 @@
 
     if (!options || options.interceptWindowOpen !== false) {
       let capturedUrl = '';
+      let capturedSource = '';
       const originalOpen = window.open;
       let replacedOpen = false;
+      const configuredDelay = Number(options && options.captureDelayMs);
+      const captureDelayMs = Number.isFinite(configuredDelay)
+        ? Math.max(0, Math.min(configuredDelay, 3000))
+        : 1200;
+      function recordUrl(value, source) {
+        const text = String(value || '');
+        if (!text) return;
+        capturedUrl = text;
+        capturedSource = source;
+      }
       try {
-        window.open = function (url) {
-          capturedUrl = String(url || '');
-          return {
+        const interceptedOpen = function (url) {
+          recordUrl(url, 'window.open');
+          let locationHref = String(url || '');
+          const interceptedLocation = {
+            assign(value) {
+              locationHref = String(value || '');
+              recordUrl(value, 'window.open.location.assign');
+            },
+            replace(value) {
+              locationHref = String(value || '');
+              recordUrl(value, 'window.open.location.replace');
+            }
+          };
+          Object.defineProperty(interceptedLocation, 'href', {
+            configurable: true,
+            enumerable: true,
+            get() { return locationHref; },
+            set(value) {
+              locationHref = String(value || '');
+              recordUrl(value, 'window.open.location.href');
+            }
+          });
+          const interceptedWindow = {
             closed: false,
             focus() {},
             close() {},
             postMessage() {},
-            location: { href: capturedUrl }
+            document: {}
           };
+          Object.defineProperty(interceptedWindow, 'location', {
+            configurable: true,
+            enumerable: true,
+            get() { return interceptedLocation; },
+            set(value) {
+              locationHref = String(value || '');
+              recordUrl(value, 'window.open.location');
+            }
+          });
+          return interceptedWindow;
         };
+        window.open = interceptedOpen;
         replacedOpen = window.open !== originalOpen;
         trigger.click();
-        await new Promise(resolve => setTimeout(resolve, 1200));
+        await new Promise(resolve => setTimeout(resolve, captureDelayMs));
       } catch (error) {
         // The targeted active-job component fallback below remains available.
       } finally {
-        if (replacedOpen) window.open = originalOpen;
+        if (replacedOpen) {
+          try { window.open = originalOpen; } catch (error) { /* ignore */ }
+        }
       }
       if (capturedUrl) {
-        return { triggerFound: true, url: capturedUrl, source: 'window.open' };
+        return { triggerFound: true, url: capturedUrl, source: capturedSource || 'window.open' };
       }
     }
 
@@ -114,8 +160,10 @@
   function clickJobDetailTriggerInPage() {
     const root = document.querySelector('.chat-conversation') || document;
     const selectors = [
+      '.chat-position-content [ka="geek_chat_job_detail"] .right-content',
+      '[ka="geek_chat_job_detail"] .right-content',
       '[ka="geek_chat_job_detail"]',
-      '.chat-position-content .position-content .right-content',
+      '.chat-position-content .position-content > .right-content',
       '.chat-position-content .position-content'
     ];
     const trigger = selectors

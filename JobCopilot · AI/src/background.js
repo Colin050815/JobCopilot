@@ -396,6 +396,37 @@ async function captureActiveJobDetailUrl(tabId) {
   }
 
   try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      world: 'MAIN',
+      func: JobDetailPopupCapture.captureJobDetailUrlInPage,
+      args: [{ interceptWindowOpen: true, captureDelayMs: 1800 }]
+    });
+    const intercepted = results && results[0] && results[0].result ? results[0].result : {};
+    const url = MobileFollowupCore.normalizeJobDetailUrl(intercepted.url);
+    if (url) {
+      return {
+        success: true,
+        triggerFound: true,
+        url: url,
+        source: intercepted.source || 'window.open',
+        error: ''
+      };
+    }
+    if (intercepted.triggerFound === false) {
+      return {
+        success: false,
+        triggerFound: false,
+        url: '',
+        source: '',
+        error: '当前会话没有可点击的“查看职位”入口'
+      };
+    }
+  } catch (error) {
+    // A real new-tab listener remains as the final compatibility fallback.
+  }
+
+  try {
     const openerTab = await chrome.tabs.get(tabId);
     const captured = await JobDetailTabCapture.captureNewJobDetailTab({
       tabs: chrome.tabs,
