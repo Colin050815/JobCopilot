@@ -10,7 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Edge%20%7C%20Chrome-brightgreen.svg)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-orange.svg)
 ![AI](https://img.shields.io/badge/AI-GPT--5.6%20via%20MuskAI-purple.svg)
-![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.5.1-blue.svg)
 
 [功能特性](#-功能特性) · [快速开始](#-快速开始) · [工作流程](#-工作流程) · [免责声明](#️-免责声明)
 
@@ -96,7 +96,7 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 如果你先在 BOSS 手机 App 投递了一批岗位，可在网页端登录同一账号后使用侧边栏的 **④ 手机投递补充**：
 
 1. 选择扫描方式。**列表前 N 条**默认检查最近 28 条，可填写 1–50；即使最新预览是 HR 回复，也会点开会话寻找你此前发送的通用开场白。**日期与时间**模式保留原有的分钟范围筛选，单次范围最多 3 小时。
-2. 点击 **扫描会话 + 生成草稿**。插件会逐条确认当前 HR、岗位以及本人开场白；跨天后列表只显示“昨天”时，日期模式还会从聊天记录读取准确分钟。确认后读取对应 JD 并生成补充说明，不会发送消息。
+2. 点击 **扫描会话 + 生成草稿**。插件会逐条确认当前 HR、岗位以及本人开场白；跨天后列表只显示“昨天”时，日期模式还会从聊天记录读取准确分钟。“查看职位”创建的岗位标签页会在读取到准确链接后立即关闭。确认后读取对应 JD 并生成补充说明，不会发送消息。
 3. 逐条核对 HR、公司、岗位、原消息和草稿；可编辑正文或取消勾选。读取不到唯一会话或 JD 的项目会被禁用，不会凭空生成。
 4. 点击 **确认发送选中** 后，浏览器还会列出本次收件人并再次确认。只有确认后的选中草稿才会逐条发送。
 
@@ -147,6 +147,7 @@ src/
 ├── content-chat.js    # 聊天页：发送简历图片/招呼语 + 手机投递会话定位
 ├── content-job-detail.js # 岗位详情页：只读提取 JD
 ├── job-detail-popup-capture.js # 从无 href 的“查看职位”入口捕获准确岗位链接
+├── job-detail-tab-capture.js # 监听岗位标签页的创建/跳转并安全清理
 ├── mobile-followup-core.js # 时间筛选、通用开场白识别与发送校验
 ├── selectors.js       # DOM 选择器与城市编码
 └── sidepanel.*        # 侧边栏界面（配置 / 审核 / 日志）

@@ -7,12 +7,12 @@
 
   // This function is deliberately self-contained because Chrome serializes it
   // into the BOSS page's MAIN world through chrome.scripting.executeScript.
-  async function captureJobDetailUrlInPage() {
+  async function captureJobDetailUrlInPage(options) {
     const root = document.querySelector('.chat-conversation') || document;
     const selectors = [
+      '[ka="geek_chat_job_detail"]',
       '.chat-position-content .position-content .right-content',
-      '.chat-position-content .position-content',
-      '[ka="geek_chat_job_detail"]'
+      '.chat-position-content .position-content'
     ];
     const trigger = selectors
       .map(selector => root.querySelector(selector))
@@ -38,30 +38,32 @@
       }
     }
 
-    let capturedUrl = '';
-    const originalOpen = window.open;
-    let replacedOpen = false;
-    try {
-      window.open = function (url) {
-        capturedUrl = String(url || '');
-        return {
-          closed: false,
-          focus() {},
-          close() {},
-          postMessage() {},
-          location: { href: capturedUrl }
+    if (!options || options.interceptWindowOpen !== false) {
+      let capturedUrl = '';
+      const originalOpen = window.open;
+      let replacedOpen = false;
+      try {
+        window.open = function (url) {
+          capturedUrl = String(url || '');
+          return {
+            closed: false,
+            focus() {},
+            close() {},
+            postMessage() {},
+            location: { href: capturedUrl }
+          };
         };
-      };
-      replacedOpen = window.open !== originalOpen;
-      trigger.click();
-      await new Promise(resolve => setTimeout(resolve, 1200));
-    } catch (error) {
-      // The targeted active-job component fallback below remains available.
-    } finally {
-      if (replacedOpen) window.open = originalOpen;
-    }
-    if (capturedUrl) {
-      return { triggerFound: true, url: capturedUrl, source: 'window.open' };
+        replacedOpen = window.open !== originalOpen;
+        trigger.click();
+        await new Promise(resolve => setTimeout(resolve, 1200));
+      } catch (error) {
+        // The targeted active-job component fallback below remains available.
+      } finally {
+        if (replacedOpen) window.open = originalOpen;
+      }
+      if (capturedUrl) {
+        return { triggerFound: true, url: capturedUrl, source: 'window.open' };
+      }
     }
 
     const roots = [];
@@ -108,7 +110,27 @@
     };
   }
 
+  // This is also serialized into the page's MAIN world. Keep it self-contained.
+  function clickJobDetailTriggerInPage() {
+    const root = document.querySelector('.chat-conversation') || document;
+    const selectors = [
+      '[ka="geek_chat_job_detail"]',
+      '.chat-position-content .position-content .right-content',
+      '.chat-position-content .position-content'
+    ];
+    const trigger = selectors
+      .map(selector => root.querySelector(selector))
+      .find(element => element && (
+        element.offsetParent !== null ||
+        getComputedStyle(element).position === 'fixed'
+      ));
+    if (!trigger) return { triggerFound: false, clicked: false };
+    trigger.click();
+    return { triggerFound: true, clicked: true };
+  }
+
   return Object.freeze({
-    captureJobDetailUrlInPage: captureJobDetailUrlInPage
+    captureJobDetailUrlInPage: captureJobDetailUrlInPage,
+    clickJobDetailTriggerInPage: clickJobDetailTriggerInPage
   });
 });

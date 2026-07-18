@@ -163,9 +163,9 @@
       '.top-info-content .company-name'
     ]);
     const detailTrigger = [
+      '[ka="geek_chat_job_detail"]',
       '.chat-position-content .position-content .right-content',
-      '.chat-position-content .position-content',
-      '[ka="geek_chat_job_detail"]'
+      '.chat-position-content .position-content'
     ].map(selector => root.querySelector(selector)).find(isVisible);
     const recentSelfMessages = Array.from(root.querySelectorAll(
       '.chat-message .im-list > li.message-item, .im-list > li.message-item'

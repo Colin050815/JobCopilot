@@ -1,5 +1,5 @@
 // ===== BOSS自动投递 Service Worker：编排 收集→筛选→审核→投递 + MuskAI GPT-5.6 =====
-importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/mobile-followup-core.js', '/src/job-detail-popup-capture.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
+importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/mobile-followup-core.js', '/src/job-detail-popup-capture.js', '/src/job-detail-tab-capture.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
 const aiClient = MuskAIClient.createClient();
 const deliveryGate = JobDataCore.createDeliveryGate();
 const followupGate = JobDataCore.createDeliveryGate();
@@ -362,28 +362,73 @@ async function readJobDetailInTab(tabId, jobUrl) {
 }
 
 async function captureActiveJobDetailUrl(tabId) {
+  let inspected = {};
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tabId },
       world: 'MAIN',
-      func: JobDetailPopupCapture.captureJobDetailUrlInPage
+      func: JobDetailPopupCapture.captureJobDetailUrlInPage,
+      args: [{ interceptWindowOpen: false }]
     });
-    const captured = results && results[0] && results[0].result ? results[0].result : {};
-    const url = MobileFollowupCore.normalizeJobDetailUrl(captured.url);
-    return {
-      success: Boolean(url),
-      triggerFound: Boolean(captured.triggerFound),
-      url: url,
-      source: captured.source || '',
-      error: url ? '' : '未能从“查看职位”入口解析岗位详情链接'
-    };
+    inspected = results && results[0] && results[0].result ? results[0].result : {};
+    const url = MobileFollowupCore.normalizeJobDetailUrl(inspected.url);
+    if (url) {
+      return {
+        success: true,
+        triggerFound: Boolean(inspected.triggerFound),
+        url: url,
+        source: inspected.source || '',
+        error: ''
+      };
+    }
   } catch (error) {
+    inspected = { triggerFound: false, inspectError: error.message || '岗位详情入口检查失败' };
+  }
+
+  if (inspected.triggerFound === false) {
     return {
       success: false,
       triggerFound: false,
       url: '',
       source: '',
-      error: error.message || '岗位详情入口解析失败'
+      error: inspected.inspectError || '当前会话没有可读取的“查看职位”入口'
+    };
+  }
+
+  try {
+    const openerTab = await chrome.tabs.get(tabId);
+    const captured = await JobDetailTabCapture.captureNewJobDetailTab({
+      tabs: chrome.tabs,
+      openerTabId: tabId,
+      openerWindowId: openerTab.windowId,
+      timeoutMs: 8000,
+      click: async () => {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          world: 'MAIN',
+          func: JobDetailPopupCapture.clickJobDetailTriggerInPage
+        });
+        return results && results[0] ? results[0].result : { triggerFound: false, clicked: false };
+      }
+    });
+    const closeIds = new Set(captured.cleanupTabIds || []);
+    if (Number.isInteger(captured.tabId)) closeIds.add(captured.tabId);
+    await Promise.all(Array.from(closeIds).map(id => chrome.tabs.remove(id).catch(() => {})));
+    const url = MobileFollowupCore.normalizeJobDetailUrl(captured.url);
+    return {
+      success: Boolean(url),
+      triggerFound: true,
+      url: url,
+      source: url ? 'created-tab' : '',
+      error: url ? '' : (captured.error || '点击“查看职位”后未读取到准确岗位链接')
+    };
+  } catch (error) {
+    return {
+      success: false,
+      triggerFound: true,
+      url: '',
+      source: '',
+      error: error.message || '岗位详情标签页捕获失败'
     };
   }
 }
@@ -551,11 +596,14 @@ async function runFollowupDrafting(params) {
       conversation.jobUrl = MobileFollowupCore.normalizeJobDetailUrl(
         context.jobUrl || conversation.jobUrl
       );
+      let jobLinkError = '';
       if (!conversation.jobUrl && context.hasJobDetailTrigger) {
         const captured = await captureActiveJobDetailUrl(chatTab.id);
         if (captured.success) {
           conversation.jobUrl = captured.url;
           log('  已从 BOSS“查看职位”入口读取岗位链接', 'success');
+        } else {
+          jobLinkError = captured.error || '';
         }
       }
 
@@ -563,7 +611,7 @@ async function runFollowupDrafting(params) {
         drafts.push(Object.assign({}, conversation, {
           text: '',
           error: context.hasJobDetailTrigger
-            ? '已找到“查看职位”，但未能解析准确链接；请刷新 BOSS 聊天页后重试'
+            ? (jobLinkError || '已找到“查看职位”，但未能解析准确岗位链接')
             : '当前会话没有可读取的“查看职位”入口，请在 BOSS 手动查看'
         }));
         progress(index + 1, candidates.length, '生成补充草稿');
