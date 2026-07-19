@@ -11,7 +11,8 @@ async function withPageFixture(click, run) {
     window: global.window,
     location: global.location,
     getComputedStyle: global.getComputedStyle,
-    Node: global.Node
+    Node: global.Node,
+    HTMLAnchorElement: global.HTMLAnchorElement
   };
   const outerCard = {
     offsetParent: {},
@@ -46,12 +47,24 @@ async function withPageFixture(click, run) {
   global.document = {
     querySelector(selector) {
       return selector === '.chat-conversation' ? pageRoot : null;
-    }
+    },
+    addEventListener() {},
+    removeEventListener() {}
   };
   global.window = { open() { return null; } };
   global.location = { origin: 'https://www.zhipin.com' };
   global.getComputedStyle = () => ({ position: 'static' });
   global.Node = function Node() {};
+  global.HTMLAnchorElement = class HTMLAnchorElement {
+    constructor(href) {
+      this.href = href;
+      this.originalClicks = 0;
+    }
+
+    click() {
+      this.originalClicks++;
+    }
+  };
 
   try {
     await run();
@@ -92,6 +105,28 @@ test('captures a delayed URL assigned after window.open about:blank', async () =
       assert.equal(result.triggerFound, true);
       assert.equal(result.url, 'https://www.zhipin.com/job_detail/assignedJob123.html');
       assert.equal(result.source, 'window.open.location.href');
+    }
+  );
+});
+
+test('captures a generated job-detail anchor without opening it', async () => {
+  let anchor;
+  await withPageFixture(
+    () => {
+      anchor = new global.HTMLAnchorElement(
+        'https://www.zhipin.com/job_detail/anchorJob123.html?lid=chat'
+      );
+      anchor.click();
+    },
+    async () => {
+      const result = await captureJobDetailUrlInPage({
+        interceptWindowOpen: true,
+        captureDelayMs: 0
+      });
+      assert.equal(result.triggerFound, true);
+      assert.equal(result.url, 'https://www.zhipin.com/job_detail/anchorJob123.html?lid=chat');
+      assert.equal(result.source, 'anchor.click');
+      assert.equal(anchor.originalClicks, 0);
     }
   );
 });

@@ -10,7 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Edge%20%7C%20Chrome-brightgreen.svg)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-orange.svg)
 ![AI](https://img.shields.io/badge/AI-GPT--5.6%20via%20MuskAI-purple.svg)
-![Version](https://img.shields.io/badge/version-1.5.2-blue.svg)
+![Version](https://img.shields.io/badge/version-1.5.3-blue.svg)
 
 [功能特性](#-功能特性) · [快速开始](#-快速开始) · [工作流程](#-工作流程) · [免责声明](#️-免责声明)
 
@@ -96,7 +96,7 @@ git clone https://github.com/huluobo2237-pixel/JobCopilot.git
 如果你先在 BOSS 手机 App 投递了一批岗位，可在网页端登录同一账号后使用侧边栏的 **④ 手机投递补充**：
 
 1. 选择扫描方式。**列表前 N 条**默认检查最近 28 条，可填写 1–50；即使最新预览是 HR 回复，也会点开会话寻找你此前发送的通用开场白。**日期与时间**模式保留原有的分钟范围筛选，单次范围最多 3 小时。
-2. 点击 **扫描会话 + 生成草稿**。插件会逐条确认当前 HR、岗位以及本人开场白；跨天后列表只显示“昨天”时，日期模式还会从聊天记录读取准确分钟。插件优先在页面内截获“查看职位”的准确链接，不依赖 Edge 是否允许脚本弹窗；若 BOSS 创建了岗位标签页，会在读取链接后立即关闭。确认后读取对应 JD 并生成补充说明，不会发送消息。
+2. 点击 **扫描会话 + 生成草稿**。插件会逐条确认当前 HR、岗位以及本人开场白；跨天后列表只显示“昨天”时，日期模式还会从聊天记录读取准确分钟。插件优先在页面内截获“查看职位”的准确链接；若 BOSS 只响应真实用户输入，则通过浏览器调试接口仅在已验证的“查看职位”坐标发送一次鼠标点击，随即断开调试。若创建了岗位标签页，会在读取链接后立即关闭。确认后读取对应 JD 并生成补充说明，不会发送消息。
 3. 逐条核对 HR、公司、岗位、原消息和草稿；可编辑正文或取消勾选。读取不到唯一会话或 JD 的项目会被禁用，不会凭空生成。
 4. 点击 **确认发送选中** 后，浏览器还会列出本次收件人并再次确认。只有确认后的选中草稿才会逐条发送。
 
@@ -148,6 +148,7 @@ src/
 ├── content-job-detail.js # 岗位详情页：只读提取 JD
 ├── job-detail-popup-capture.js # 从无 href 的“查看职位”入口捕获准确岗位链接
 ├── job-detail-tab-capture.js # 监听岗位标签页的创建/跳转并安全清理
+├── trusted-click-core.js # 在已验证的职位入口坐标执行一次可信点击并立即断开
 ├── mobile-followup-core.js # 时间筛选、通用开场白识别与发送校验
 ├── selectors.js       # DOM 选择器与城市编码
 └── sidepanel.*        # 侧边栏界面（配置 / 审核 / 日志）
@@ -161,6 +162,7 @@ src/
 - 图片和扫描 PDF 不会自动上传；只有点击 **使用 MuskAI OCR** 并确认后，最多 5 页的渲染图片才会发送 MuskAI。
 - AI 筛选会把**简历文字和岗位信息**发送到 MuskAI；生成招呼语时还会发送岗位 JD。请在使用前确认你接受该第三方中转处理这些内容。
 - “手机投递补充”会在 BOSS 网页中本地读取会话时间、收件人和岗位链接；生成草稿时会把**简历文字与对应岗位 JD**发送到 MuskAI。草稿保存在 `chrome.storage.local`，只有你勾选并通过发送确认后才会发给 HR。
+- `debugger` 权限只用于在当前 BOSS 会话中已验证的“查看职位”坐标发送一次鼠标点击；插件不会读取调试网络数据，并在点击后立即断开。
 - 简历图片只在你确认投递后发送给对应 HR，不会作为 MuskAI 请求内容。
 - API 请求设置 `store: false`，但中转站自身的数据处理规则仍以 MuskAI 的服务条款和隐私政策为准。
 

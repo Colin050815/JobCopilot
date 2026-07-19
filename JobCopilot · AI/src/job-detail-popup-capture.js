@@ -45,6 +45,14 @@
       let capturedSource = '';
       const originalOpen = window.open;
       let replacedOpen = false;
+      const anchorPrototype = typeof HTMLAnchorElement !== 'undefined'
+        ? HTMLAnchorElement.prototype
+        : null;
+      const anchorClickDescriptor = anchorPrototype
+        ? Object.getOwnPropertyDescriptor(anchorPrototype, 'click')
+        : null;
+      const originalAnchorClick = anchorPrototype && anchorPrototype.click;
+      let replacedAnchorClick = false;
       const configuredDelay = Number(options && options.captureDelayMs);
       const captureDelayMs = Number.isFinite(configuredDelay)
         ? Math.max(0, Math.min(configuredDelay, 3000))
@@ -54,6 +62,24 @@
         if (!text) return;
         capturedUrl = text;
         capturedSource = source;
+      }
+      function captureAnchor(anchor, source) {
+        if (!anchor) return false;
+        const value = String(
+          anchor.href ||
+          (anchor.getAttribute && anchor.getAttribute('href')) ||
+          ''
+        );
+        if (!value.includes('/job_detail/')) return false;
+        recordUrl(value, source);
+        return true;
+      }
+      function interceptAnchorEvent(event) {
+        const target = event && event.target;
+        const anchor = target && target.closest ? target.closest('a[href]') : null;
+        if (!captureAnchor(anchor, 'anchor-event')) return;
+        if (event.preventDefault) event.preventDefault();
+        if (event.stopImmediatePropagation) event.stopImmediatePropagation();
       }
       try {
         const interceptedOpen = function (url) {
@@ -98,6 +124,16 @@
         };
         window.open = interceptedOpen;
         replacedOpen = window.open !== originalOpen;
+        if (document.addEventListener) {
+          document.addEventListener('click', interceptAnchorEvent, true);
+        }
+        if (anchorPrototype && typeof originalAnchorClick === 'function') {
+          anchorPrototype.click = function () {
+            if (captureAnchor(this, 'anchor.click')) return;
+            return originalAnchorClick.apply(this, arguments);
+          };
+          replacedAnchorClick = anchorPrototype.click !== originalAnchorClick;
+        }
         trigger.click();
         await new Promise(resolve => setTimeout(resolve, captureDelayMs));
       } catch (error) {
@@ -105,6 +141,18 @@
       } finally {
         if (replacedOpen) {
           try { window.open = originalOpen; } catch (error) { /* ignore */ }
+        }
+        if (document.removeEventListener) {
+          document.removeEventListener('click', interceptAnchorEvent, true);
+        }
+        if (replacedAnchorClick && anchorPrototype) {
+          try {
+            if (anchorClickDescriptor) {
+              Object.defineProperty(anchorPrototype, 'click', anchorClickDescriptor);
+            } else {
+              delete anchorPrototype.click;
+            }
+          } catch (error) { /* ignore */ }
         }
       }
       if (capturedUrl) {
@@ -177,8 +225,53 @@
     return { triggerFound: true, clicked: true };
   }
 
+  // Return a verified viewport coordinate for a single browser-level click.
+  function getJobDetailClickPointInPage() {
+    const root = document.querySelector('.chat-conversation') || document;
+    const selectors = [
+      '.chat-position-content [ka="geek_chat_job_detail"] .right-content',
+      '[ka="geek_chat_job_detail"] .right-content',
+      '[ka="geek_chat_job_detail"]',
+      '.chat-position-content .position-content > .right-content',
+      '.chat-position-content .position-content'
+    ];
+    for (const selector of selectors) {
+      const element = root.querySelector(selector);
+      if (!element || typeof element.getBoundingClientRect !== 'function') continue;
+      const rect = element.getBoundingClientRect();
+      if (
+        !rect ||
+        rect.width <= 0 ||
+        rect.height <= 0 ||
+        rect.bottom <= 0 ||
+        rect.right <= 0 ||
+        rect.top >= window.innerHeight ||
+        rect.left >= window.innerWidth
+      ) continue;
+      const x = Math.max(1, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+      const y = Math.max(1, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+      const hit = document.elementFromPoint ? document.elementFromPoint(x, y) : element;
+      if (hit && !element.contains(hit) && !hit.contains(element)) continue;
+      return {
+        triggerFound: true,
+        x: x,
+        y: y,
+        selector: selector,
+        text: String(element.textContent || '').trim().slice(0, 80)
+      };
+    }
+    return {
+      triggerFound: false,
+      x: null,
+      y: null,
+      selector: '',
+      text: ''
+    };
+  }
+
   return Object.freeze({
     captureJobDetailUrlInPage: captureJobDetailUrlInPage,
-    clickJobDetailTriggerInPage: clickJobDetailTriggerInPage
+    clickJobDetailTriggerInPage: clickJobDetailTriggerInPage,
+    getJobDetailClickPointInPage: getJobDetailClickPointInPage
   });
 });

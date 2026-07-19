@@ -1,5 +1,5 @@
 // ===== BOSS自动投递 Service Worker：编排 收集→筛选→审核→投递 + MuskAI GPT-5.6 =====
-importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/mobile-followup-core.js', '/src/job-detail-popup-capture.js', '/src/job-detail-tab-capture.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
+importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/mobile-followup-core.js', '/src/job-detail-popup-capture.js', '/src/job-detail-tab-capture.js', '/src/trusted-click-core.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
 const aiClient = MuskAIClient.createClient();
 const deliveryGate = JobDataCore.createDeliveryGate();
 const followupGate = JobDataCore.createDeliveryGate();
@@ -434,12 +434,33 @@ async function captureActiveJobDetailUrl(tabId) {
       openerWindowId: openerTab.windowId,
       timeoutMs: 8000,
       click: async () => {
-        const results = await chrome.scripting.executeScript({
+        const pointResults = await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          world: 'MAIN',
+          func: JobDetailPopupCapture.getJobDetailClickPointInPage
+        });
+        const point = pointResults && pointResults[0] ? pointResults[0].result : {};
+        if (!point || point.triggerFound === false) {
+          return { triggerFound: false, clicked: false };
+        }
+        const trusted = await TrustedClickCore.dispatchTrustedClick({
+          debuggerApi: chrome.debugger,
+          tabId: tabId,
+          x: point.x,
+          y: point.y
+        });
+        if (trusted.success) {
+          return { triggerFound: true, clicked: true, method: 'trusted-input' };
+        }
+
+        const fallbackResults = await chrome.scripting.executeScript({
           target: { tabId: tabId },
           world: 'MAIN',
           func: JobDetailPopupCapture.clickJobDetailTriggerInPage
         });
-        return results && results[0] ? results[0].result : { triggerFound: false, clicked: false };
+        const fallback = fallbackResults && fallbackResults[0] ? fallbackResults[0].result : {};
+        if (fallback && fallback.clicked) return fallback;
+        throw new Error(trusted.error || '“查看职位”入口点击失败');
       }
     });
     const closeIds = new Set(captured.cleanupTabIds || []);
