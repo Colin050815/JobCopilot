@@ -17,6 +17,8 @@ const {
   resolveMessageDateTime,
   isMessageWithinRange,
   normalizeJobDetailUrl,
+  jobIdFromDetailUrl,
+  normalizeExactJobDetailUrl,
   filterCandidates,
   validateDraftSelection
 } = require('../JobCopilot · AI/src/mobile-followup-core.js');
@@ -127,6 +129,14 @@ test('accepts only exact BOSS job-detail URLs', () => {
   );
   assert.equal(normalizeJobDetailUrl('https://example.com/job_detail/abc123XYZ.html'), '');
   assert.equal(normalizeJobDetailUrl('https://www.zhipin.com/web/geek/chat'), '');
+});
+
+test('uses a job-detail fallback only when its encrypted job ID matches exactly', () => {
+  const exactUrl = 'https://www.zhipin.com/job_detail/abc123XYZ.html?lid=source&securityId=token';
+  assert.equal(jobIdFromDetailUrl(exactUrl), 'abc123XYZ');
+  assert.equal(normalizeExactJobDetailUrl(exactUrl, 'abc123XYZ'), exactUrl);
+  assert.equal(normalizeExactJobDetailUrl(exactUrl, 'another-job'), '');
+  assert.equal(normalizeExactJobDetailUrl('https://example.com/job_detail/abc123XYZ.html', 'abc123XYZ'), '');
 });
 
 test('filters the mobile application batch by time and generic greeting preview', () => {

@@ -10,7 +10,7 @@
 ![Platform](https://img.shields.io/badge/platform-Edge%20%7C%20Chrome-brightgreen.svg)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-orange.svg)
 ![AI](https://img.shields.io/badge/AI-GPT--5.6%20via%20MuskAI-purple.svg)
-![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.6.1-blue.svg)
 
 [功能特性](#-功能特性) · [快速开始](#-快速开始) · [工作流程](#-工作流程) · [免责声明](#️-免责声明)
 
@@ -39,6 +39,7 @@
 - ✍️ **千岗千面招呼语**：每个岗位单独生成「熟悉 XXX、做过 XXX」格式招呼语，精准对口
 - 📱 **手机投递补充**：可按会话列表前 N 条（默认 28）或日期时间扫描；逐条确认本人开场白并读取 JD 后生成可编辑草稿
 - ✅ **审核确认机制**：投递前列出岗位名称、公司、薪资、地区和海投/筛选说明，你勾选确认
+- 🔎 **懒加载岗位恢复**：投递时按精确岗位 ID 滚动恢复搜索批次，卡片仍缺失时使用已保存的精确详情链接，避免漏投或误点同名岗位
 - 🔒 **精确投递保护**：后台严格校验勾选数量与审核可投结果，并阻止重复或并发投递；审核区可随时停止
 - 🫀 **标签页后台运行**：侧边栏心跳维持任务，可切换其他标签页；页面操作超时会安全跳过，已投岗位自动锁定
 - 📎 **自动发送简历**：先发简历图片，再发招呼语，一个岗位完整闭环再投下一个

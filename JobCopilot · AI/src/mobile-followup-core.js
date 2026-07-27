@@ -228,6 +228,25 @@
     }
   }
 
+  function jobIdFromDetailUrl(value, baseUrl) {
+    const normalized = normalizeJobDetailUrl(value, baseUrl);
+    if (!normalized) return '';
+    try {
+      const match = new URL(normalized).pathname.match(/^\/job_detail\/([^/?#]+)\.html$/i);
+      if (!match) return '';
+      return decodeURIComponent(match[1]);
+    } catch (error) {
+      return '';
+    }
+  }
+
+  function normalizeExactJobDetailUrl(value, expectedJobId, baseUrl) {
+    const normalized = normalizeJobDetailUrl(value, baseUrl);
+    const expected = cleanText(expectedJobId);
+    if (!normalized || !expected) return '';
+    return jobIdFromDetailUrl(normalized) === expected ? normalized : '';
+  }
+
   function filterCandidates(conversations, params, now) {
     const scan = validateScanParams(params);
     if (!scan.ok) return [];
@@ -308,6 +327,8 @@
     resolveMessageDateTime: resolveMessageDateTime,
     isMessageWithinRange: isMessageWithinRange,
     normalizeJobDetailUrl: normalizeJobDetailUrl,
+    jobIdFromDetailUrl: jobIdFromDetailUrl,
+    normalizeExactJobDetailUrl: normalizeExactJobDetailUrl,
     filterCandidates: filterCandidates,
     validateDraftSelection: validateDraftSelection
   });

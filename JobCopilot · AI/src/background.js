@@ -373,14 +373,27 @@ async function runCollect() {
 }
 
 // ── 流程：为手机端刚投递的会话生成并审核补充介绍 ──
-async function readJobDetailInTab(tabId, jobUrl) {
+function exactJobDetailUrl(job) {
+  job = job || {};
+  const id = String(job.id || '').trim();
+  if (!id) return '';
+  const saved = MobileFollowupCore.normalizeExactJobDetailUrl(String(job.link || '').trim(), id);
+  if (saved) return saved;
+
+  const url = new URL('/job_detail/' + encodeURIComponent(id) + '.html', 'https://www.zhipin.com/');
+  if (job.lid) url.searchParams.set('lid', String(job.lid));
+  if (job.securityId) url.searchParams.set('securityId', String(job.securityId));
+  return MobileFollowupCore.normalizeExactJobDetailUrl(url.href, id);
+}
+
+async function readJobDetailInTab(tabId, jobUrl, expectedJob) {
   const safeUrl = MobileFollowupCore.normalizeJobDetailUrl(jobUrl);
   if (!safeUrl) return { success: false, error: '岗位详情链接无效或不属于 BOSS' };
   const tab = await chrome.tabs.update(tabId, { url: safeUrl });
   const loaded = await waitTabComplete(tab.id, 30000);
   if (!loaded) return { success: false, error: '岗位详情页加载超时' };
   await ensureInjected(tab.id, 'src/content-job-detail.js');
-  return sendToTab(tab.id, { type: 'READ_JOB_DETAIL' }, 20000);
+  return sendToTab(tab.id, { type: 'READ_JOB_DETAIL', job: expectedJob || null }, 20000);
 }
 
 async function captureActiveJobDetailUrl(tabId) {
@@ -922,7 +935,16 @@ async function runDeliver(jobIds) {
     const tab = await ensureTab(searchUrl);
     await ensureInjected(tab.id, 'src/content-search.js');
     log('  读取岗位JD...');
-    const jdr = await sendToTab(tab.id, { type: 'OPEN_JD', job: job }, 20000);
+    let detailSource = 'search_card';
+    let jdr = await sendToTab(tab.id, { type: 'OPEN_JD', job: job }, 30000);
+    if (jdr && !jdr.success && jdr.code === 'JOB_CARD_NOT_FOUND') {
+      const detailUrl = exactJobDetailUrl(job);
+      if (detailUrl) {
+        log('  当前搜索批次未显示该卡片，改用已保存的精确岗位链接...');
+        jdr = await readJobDetailInTab(tab.id, detailUrl, job);
+        if (jdr && jdr.success) detailSource = 'job_detail';
+      }
+    }
     if (!jdr || !jdr.success) {
       const error = (jdr && jdr.error) || '岗位卡片校验失败';
       recordFail(job, error); log('  ' + error + '，安全跳过', 'error');
@@ -946,7 +968,10 @@ async function runDeliver(jobIds) {
 
     // 3. 点立即沟通 → 继续沟通（跳聊天页）
     log('  建立联系（立即沟通 → 继续沟通）...');
-    const chatStart = await sendToTab(tab.id, { type: 'GO_CHAT', job: job }, 30000);
+    const chatStart = await sendToTab(tab.id, {
+      type: detailSource === 'job_detail' ? 'START_JOB_CHAT' : 'GO_CHAT',
+      job: job
+    }, 30000);
     const navigationDisconnect = Boolean(
       chatStart &&
       !chatStart.success &&

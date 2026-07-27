@@ -103,7 +103,7 @@
     return { jobs: merged, warning: apiResult.warning };
   }
 
-  function findCardByJob(job) {
+  function findLoadedCardByJob(job) {
     const cards = getCards();
     for (const c of cards) { const j = parseCard(c); if (job.id && j.id === job.id) return c; }
     if (job.id) return null;
@@ -112,6 +112,70 @@
       if (j.name === job.name && job.company && j.company === job.company) return c;
     }
     return null;
+  }
+
+  function getScrollableJobLists() {
+    const selectors = [
+      '.job-list-container',
+      '.job-list-box',
+      '.job-list',
+      '[class*="job-list"]'
+    ];
+    const seen = new Set();
+    const lists = [];
+    for (const selector of selectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (seen.has(element)) continue;
+        seen.add(element);
+        if (element.scrollHeight > element.clientHeight + 80) lists.push(element);
+      }
+    }
+    return lists;
+  }
+
+  function cardBatchSignature() {
+    return getCards().map(card => parseCard(card).id).filter(Boolean).join('|');
+  }
+
+  function resetJobListScroll() {
+    window.scrollTo(0, 0);
+    const root = document.scrollingElement;
+    if (root) root.scrollTop = 0;
+    for (const list of getScrollableJobLists()) list.scrollTop = 0;
+  }
+
+  function advanceJobListScroll() {
+    window.scrollTo(0, document.body.scrollHeight);
+    const root = document.scrollingElement;
+    if (root) root.scrollTop = root.scrollHeight;
+    for (const list of getScrollableJobLists()) list.scrollTop = list.scrollHeight;
+  }
+
+  // BOSS 的搜索结果会懒加载/虚拟化。收集时见过的岗位，重新打开搜索页后
+  // 不一定在首批 DOM 中，因此必须逐批滚动并始终用岗位 ID 精确匹配。
+  async function findCardByJob(job) {
+    let card = findLoadedCardByJob(job);
+    if (card) return { card: card, batches: 0 };
+
+    resetJobListScroll();
+    await sleep(500);
+    card = findLoadedCardByJob(job);
+    if (card) return { card: card, batches: 0 };
+
+    let unchanged = 0;
+    let previous = cardBatchSignature();
+    for (let batch = 1; batch <= 16 && unchanged < 4; batch++) {
+      advanceJobListScroll();
+      await sleep(1000);
+      card = findLoadedCardByJob(job);
+      if (card) return { card: card, batches: batch };
+
+      const current = cardBatchSignature();
+      if (current && current !== previous) unchanged = 0;
+      else unchanged++;
+      previous = current;
+    }
+    return { card: null, batches: 0 };
   }
 
   function waitFor(sel, timeout) {
@@ -142,8 +206,15 @@
 
   // 点开卡片 → 抓取右侧详情面板的完整JD
   async function openJD(job) {
-    const card = findCardByJob(job);
-    if (!card) return { success: false, error: '未找到岗位卡片' };
+    const found = await findCardByJob(job);
+    const card = found.card;
+    if (!card) {
+      return {
+        success: false,
+        code: 'JOB_CARD_NOT_FOUND',
+        error: '滚动加载后仍未找到精确岗位卡片'
+      };
+    }
     card.scrollIntoView({ block: 'center' });
     await sleep(400);
     card.click();
@@ -155,13 +226,20 @@
       const secs = document.querySelectorAll('.job-sec-text, [class*="job-sec"], [class*="job-desc"]');
       jd = Array.from(secs).map(s => (s.innerText || '').trim()).filter(Boolean).join('\n');
     }
-    return { success: true, jd: jd.slice(0, 1800) };
+    return { success: true, jd: jd.slice(0, 1800), cardBatches: found.batches };
   }
 
   // 卡片已打开 → 点立即沟通 → 弹窗点"继续沟通"（跳转聊天页）
   async function goChat(job) {
-    const card = findCardByJob(job);
-    if (!card) return { success: false, error: '未找到本轮精确岗位卡片' };
+    const found = await findCardByJob(job);
+    const card = found.card;
+    if (!card) {
+      return {
+        success: false,
+        code: 'JOB_CARD_NOT_FOUND',
+        error: '滚动加载后仍未找到本轮精确岗位卡片'
+      };
+    }
     const current = parseCard(card);
     if (!job.id || current.id !== job.id) return { success: false, error: '岗位 ID 校验失败' };
     card.scrollIntoView({ block: 'center' });
