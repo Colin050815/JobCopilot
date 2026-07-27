@@ -272,9 +272,10 @@ async function runCollect() {
   state.jobs = []; state.screened = []; state.greetings = {}; state.results = [];
   state.phase = 'collecting'; pushPhase();
   const cfg = await getCfg();
-  if (!cfg.muskApiKey) { log('请先填写 MuskAI API Key', 'error'); state.phase = 'idle'; pushPhase(); return; }
+  const screeningMode = cfg.screeningMode === 'ai' ? 'ai' : 'bulk';
+  if (screeningMode === 'ai' && !cfg.muskApiKey) { log('AI 精准筛选需要 MuskAI API Key', 'error'); state.phase = 'idle'; pushPhase(); return; }
   if (!cfg.keyword) { log('请先填写岗位关键词', 'error'); state.phase = 'idle'; pushPhase(); return; }
-  if (!(cfg.resumeText || '').trim()) { log('请先在设置里填写"简历文字"（AI筛选和招呼语都需要它）', 'error'); state.phase = 'idle'; pushPhase(); return; }
+  if (screeningMode === 'ai' && !(cfg.resumeText || '').trim()) { log('AI 精准筛选需要先填写“简历文字”', 'error'); state.phase = 'idle'; pushPhase(); return; }
 
   const count = Math.min(200, Math.max(1, parseInt(cfg.count) || 20));
   const cityResolution = resolveCities(cfg);
@@ -324,6 +325,27 @@ async function runCollect() {
   state.jobs = JobDataCore.mergeCityJobResults(cityResults, effectiveTarget);
   log('多城市合并去重后共 ' + state.jobs.length + ' 个岗位', 'success');
   if (!state.jobs.length) { state.phase = 'idle'; pushPhase(); return; }
+
+  if (screeningMode === 'bulk') {
+    state.screened = JobDataCore.approveJobsForBulk(state.jobs);
+    progress(state.screened.length, state.screened.length, '海投审核');
+    log(
+      '海投模式：已跳过 AI 前置筛选，' +
+      state.screened.length +
+      ' / ' +
+      state.jobs.length +
+      ' 个有效岗位进入人工审核',
+      'success'
+    );
+    await chrome.storage.local.set({
+      sw_jobs: state.jobs,
+      sw_greetings: state.greetings,
+      sw_screened: state.screened
+    });
+    state.phase = 'review'; pushPhase();
+    chrome.runtime.sendMessage({ type: 'SCREENED', screened: state.screened }).catch(() => {});
+    return;
+  }
 
   // 筛选（并发3）
   state.phase = 'screening'; pushPhase();
@@ -843,6 +865,15 @@ async function startDelivery(jobIds) {
   if (followupGate.isActive()) return { ok: false, error: '手机投递补充任务正在运行，请先停止' };
   if (!deliveryGate.tryStart()) return { ok: false, error: '已有投递任务正在运行，已阻止重复启动' };
   try {
+    const cfg = await getCfg();
+    if (!cfg.muskApiKey) {
+      deliveryGate.finish();
+      return { ok: false, error: '投递时生成专属招呼语需要 MuskAI API Key，请先保存配置' };
+    }
+    if (!(cfg.resumeText || '').trim()) {
+      deliveryGate.finish();
+      return { ok: false, error: '投递时生成专属招呼语需要简历文字，请先解析或填写简历' };
+    }
     const stored = await chrome.storage.local.get(['sw_jobs', 'sw_greetings', 'sw_screened', 'processed']);
     if (!state.jobs.length) state.jobs = stored.sw_jobs || [];
     if (!state.screened.length) state.screened = stored.sw_screened || [];
@@ -877,7 +908,7 @@ async function runDeliver(jobIds) {
 
   const ids = (jobIds || []).filter(id => !state.processed[id]);
   if (!ids.length) { log('没有可投递的岗位（可能已投过，可点重置）', 'warn'); finishDeliver(); return; }
-  log('后台已锁定本轮投递：仅 ' + ids.length + ' 个已勾选且 AI 匹配的岗位', 'info');
+  log('后台已锁定本轮投递：仅 ' + ids.length + ' 个已勾选且审核可投的岗位', 'info');
   for (let k = 0; k < ids.length; k++) {
     if (state.aborted) break;
     await waitIfPaused();
@@ -916,7 +947,12 @@ async function runDeliver(jobIds) {
     // 3. 点立即沟通 → 继续沟通（跳聊天页）
     log('  建立联系（立即沟通 → 继续沟通）...');
     const chatStart = await sendToTab(tab.id, { type: 'GO_CHAT', job: job }, 30000);
-    if (!chatStart || !chatStart.success) {
+    const navigationDisconnect = Boolean(
+      chatStart &&
+      !chatStart.success &&
+      JobDataCore.isExpectedNavigationDisconnect(chatStart.error)
+    );
+    if ((!chatStart || !chatStart.success) && !navigationDisconnect) {
       const error = (chatStart && chatStart.error) || '建立联系失败';
       recordFail(job, error); log('  ' + error + '，安全跳过', 'error');
       progress(k + 1, ids.length, '投递');
@@ -927,6 +963,9 @@ async function runDeliver(jobIds) {
         break;
       }
       continue;
+    }
+    if (navigationDisconnect) {
+      log('  BOSS 页面已开始跳转，旧页面消息通道关闭；正在验证聊天页...', 'info');
     }
     const chatLoaded = await waitTabComplete(tab.id, 30000); await sleep(2500);
     if (!chatLoaded) {

@@ -7,6 +7,7 @@ const CFG_FIELDS = [
   'keyword',
   'city',
   'count',
+  'screeningMode',
   'followupScanMode',
   'followupConversationCount'
 ];
@@ -42,6 +43,8 @@ chrome.storage.local.get(CFG_FIELDS.concat([
 ]), (d) => {
   CFG_FIELDS.forEach(f => { if (d[f] !== undefined && $(f)) $(f).value = d[f]; });
   if (!d.gptModel) $('gptModel').value = DEFAULT_MODEL;
+  if (!d.screeningMode) $('screeningMode').value = 'bulk';
+  updateScreeningMode();
   updateFollowupScanMode();
   processedJobs = d.processed || {};
   mobileFollowupDrafts = Array.isArray(d.mobileFollowupDrafts) ? d.mobileFollowupDrafts : [];
@@ -89,6 +92,19 @@ $('followupScanMode').addEventListener('change', () => {
   );
 });
 updateFollowupScanMode();
+
+function updateScreeningMode() {
+  const bulk = $('screeningMode').value !== 'ai';
+  $('btnCollect').textContent = bulk
+    ? '开始收集 → 海投审核'
+    : '开始收集 + AI筛选';
+  $('screeningModeNote').textContent = bulk
+    ? '全部有效岗位进入人工审核；投递时仍会依据 JD 生成专属招呼语。'
+    : '先把简历文字和岗位信息发送 MuskAI，只让匹配岗位进入审核。';
+}
+
+$('screeningMode').addEventListener('change', updateScreeningMode);
+updateScreeningMode();
 
 function showImages(images) {
   const preview = $('imgPrev');
@@ -425,7 +441,14 @@ $('btnSendFollowups').addEventListener('click', async () => {
 // 运行控制
 $('btnCollect').addEventListener('click', async () => {
   await saveCfgSync();
-  if (!$('muskApiKey').value.trim()) return addLog('请先填 MuskAI API Key', 'error');
+  if (
+    $('screeningMode').value === 'ai' &&
+    !$('muskApiKey').value.trim()
+  ) return addLog('AI 精准筛选需要先填写 MuskAI API Key', 'error');
+  if (
+    $('screeningMode').value === 'ai' &&
+    !$('resumeText').value.trim()
+  ) return addLog('AI 精准筛选需要先填写简历文字', 'error');
   if (!$('keyword').value.trim()) return addLog('请先填岗位关键词', 'error');
   $('reviewCard').style.display = 'none';
   setRunning(true);
@@ -565,6 +588,7 @@ function setRunning(running) {
   $('followupEnd').disabled = running;
   $('followupScanMode').disabled = running;
   $('followupConversationCount').disabled = running;
+  $('screeningMode').disabled = running;
   if (!running) $('btnPause').textContent = '暂停';
   if (running) startKeepAlive();
   else stopKeepAlive();
@@ -578,7 +602,9 @@ function setDeliveryActive(active) {
 function renderReview(screened) {
   const matched = screened.filter(j => j.match === true);
   const skipped = screened.filter(j => j.match !== true);
-  $('reviewCount').textContent = '匹配 ' + matched.length + ' / ' + screened.length;
+  const bulkMode = screened.some(j => j.screeningMode === 'bulk');
+  $('reviewCount').textContent = (bulkMode ? '海投可投 ' : 'AI 匹配 ') + matched.length + ' / ' + screened.length;
+  $('selAllLabel').textContent = bulkMode ? '全选可投' : '全选匹配';
   let html = '';
   matched.forEach(j => {
     const processedState = processedJobs[j.id];

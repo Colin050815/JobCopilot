@@ -230,6 +230,31 @@
     return merged;
   }
 
+  function approveJobsForBulk(jobs) {
+    const seen = new Set();
+    const approved = [];
+    for (const job of jobs || []) {
+      const id = cleanText(job && job.id);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      approved.push(Object.assign({}, job, {
+        match: true,
+        screeningMode: 'bulk',
+        reason: '海投模式：已跳过 AI 前置筛选，请在投递前人工审核'
+      }));
+    }
+    return approved;
+  }
+
+  function isExpectedNavigationDisconnect(value) {
+    const message = cleanText(
+      value && typeof value === 'object' ? value.message || value.error : value
+    ).toLowerCase();
+    return message.includes('back/forward cache') ||
+      message.includes('message channel is closed') ||
+      message.includes('message port closed before a response was received');
+  }
+
   function prepareDeliveryBatch(requestedIds, jobs, screened, processed) {
     const normalizedIds = (requestedIds || []).map(cleanText).filter(Boolean);
     const uniqueIds = Array.from(new Set(normalizedIds));
@@ -250,7 +275,7 @@
     const approved = [];
     for (const id of uniqueIds) {
       if (!matchedIds.has(id)) {
-        return { ok: false, error: '所选岗位中包含 AI 未匹配岗位，已阻止本轮投递', jobs: [], ids: uniqueIds };
+        return { ok: false, error: '所选岗位中包含审核列表标记为不可投的岗位，已阻止本轮投递', jobs: [], ids: uniqueIds };
       }
       if (processed && processed[id]) {
         return { ok: false, error: '所选岗位中包含已投记录，已阻止重复投递', jobs: [], ids: uniqueIds };
@@ -293,6 +318,8 @@
     buildSearchParams: buildSearchParams,
     mergeJob: mergeJob,
     mergeJobs: mergeJobs,
+    approveJobsForBulk: approveJobsForBulk,
+    isExpectedNavigationDisconnect: isExpectedNavigationDisconnect,
     prepareDeliveryBatch: prepareDeliveryBatch,
     createDeliveryGate: createDeliveryGate
   });

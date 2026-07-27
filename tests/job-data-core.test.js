@@ -14,6 +14,8 @@ const {
   mergeCityJobResults,
   mergeJobs,
   prepareDeliveryBatch,
+  approveJobsForBulk,
+  isExpectedNavigationDisconnect,
   createDeliveryGate
 } = require('../JobCopilot · AI/src/job-data-core.js');
 
@@ -199,7 +201,34 @@ test('prepares exactly the unique AI-matched jobs requested by the review UI', (
   assert.deepEqual(batch.jobs.map(job => job.id), ['one', 'three']);
 });
 
-test('rejects the whole delivery when a requested job was not matched by AI', () => {
+test('approves every unique valid job for manual review in bulk mode', () => {
+  const approved = approveJobsForBulk([
+    { id: 'one', name: '岗位一' },
+    { id: 'two', name: '岗位二' },
+    { id: 'one', name: '重复岗位' },
+    { id: '', name: '无效岗位' }
+  ]);
+  assert.deepEqual(approved.map(job => job.id), ['one', 'two']);
+  assert.equal(approved.every(job => job.match === true), true);
+  assert.equal(approved.every(job => job.screeningMode === 'bulk'), true);
+  assert.match(approved[0].reason, /跳过 AI 前置筛选/);
+
+  const largeBatch = approveJobsForBulk(Array.from({ length: 148 }, (_, index) => ({
+    id: 'job-' + index,
+    name: '岗位 ' + index
+  })));
+  assert.equal(largeBatch.length, 148);
+  assert.equal(largeBatch.every(job => job.match === true), true);
+});
+
+test('recognizes BFCache channel closure as an expected navigation signal', () => {
+  assert.equal(isExpectedNavigationDisconnect(
+    'The page keeping the extension port is moved into back/forward cache, so the message channel is closed.'
+  ), true);
+  assert.equal(isExpectedNavigationDisconnect('Could not establish connection'), false);
+});
+
+test('rejects the whole delivery when a requested job is not approved for review', () => {
   const jobs = [{ id: 'matched' }, { id: 'skipped' }];
   const screened = [
     { id: 'matched', match: true },
@@ -207,7 +236,7 @@ test('rejects the whole delivery when a requested job was not matched by AI', ()
   ];
   const batch = prepareDeliveryBatch(['matched', 'skipped'], jobs, screened, {});
   assert.equal(batch.ok, false);
-  assert.match(batch.error, /AI 未匹配/);
+  assert.match(batch.error, /标记为不可投/);
   assert.deepEqual(batch.jobs, []);
 });
 

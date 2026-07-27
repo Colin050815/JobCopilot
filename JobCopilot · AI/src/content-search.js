@@ -181,7 +181,11 @@
     btn.click();
     await sleep(1500);
     const go = await waitForText(['继续沟通'], 4000);
-    if (go) { go.click(); return { success: true, navigated: true }; }
+    if (go) {
+      // 先让消息响应送达后台，再触发会使本页进入 BFCache 的导航。
+      setTimeout(() => go.click(), 80);
+      return { success: true, navigated: true };
+    }
     return { success: true, navigated: false };
   }
 

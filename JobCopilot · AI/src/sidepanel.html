@@ -21,7 +21,7 @@
         <option value="gpt-5.6-terra" selected>GPT-5.6 Terra（默认均衡）</option>
         <option value="gpt-5.6-luna">GPT-5.6 Luna（速度优先）</option>
       </select>
-      <div class="privacy-note">Key 仅保存在本机；AI 筛选会把简历文字和岗位信息发送至 MuskAI。</div>
+      <div class="privacy-note">Key 仅保存在本机；AI 精准筛选或生成招呼语时会把必要内容发送至 MuskAI。</div>
 
       <label>简历文件（自动解析）</label>
       <input type="file" id="resumeFile" accept=".pdf,.docx,.txt,.md,image/jpeg,image/png,image/webp">
@@ -32,7 +32,7 @@
       </div>
       <div id="resumeParseStatus" class="parse-status">可在本机解析文字或生成投递图片；只有 OCR 会把扫描件发送 MuskAI。</div>
 
-      <label>简历文字（必填，用于AI筛选 + 生成招呼语）</label>
+      <label>简历文字（用于 AI 精准筛选 + 生成招呼语）</label>
       <textarea id="resumeText" rows="5" placeholder="粘贴你的简历：技能、项目经历、教育背景、实习经历等，越详细招呼语越精准"></textarea>
 
       <label>投递图片（可由上方文件生成，也可手动上传）</label>
@@ -48,6 +48,13 @@
       <label>收集岗位总数（多城市平均分配）</label>
       <input type="number" id="count" value="20" min="1" max="200">
 
+      <label>岗位筛选模式</label>
+      <select id="screeningMode">
+        <option value="bulk" selected>海投模式（跳过 AI 前置筛选）</option>
+        <option value="ai">AI 精准筛选（只保留匹配岗位）</option>
+      </select>
+      <div class="privacy-note" id="screeningModeNote">全部有效岗位进入人工审核；投递时仍会依据 JD 生成专属招呼语。</div>
+
       <div class="cfg-actions">
         <button class="btn-primary" id="saveCfg">保存配置</button>
         <button class="btn-secondary" id="btnTestAI">测试 AI 连接</button>
@@ -60,7 +67,7 @@
   <section class="card">
     <div class="card-h"><span>② 运行</span></div>
     <div class="card-b">
-      <button class="btn-go" id="btnCollect">开始收集 + AI筛选</button>
+      <button class="btn-go" id="btnCollect">开始收集 → 海投审核</button>
       <div class="run-note">运行时可切换到其他标签页，但请保持本侧边栏开启；关闭 Edge 或侧边栏会安全中断。</div>
       <div class="status-row">
         <span id="phaseText">未开始</span>
@@ -79,7 +86,7 @@
     <div class="card-h"><span>③ 审核确认</span><span id="reviewCount"></span></div>
     <div class="card-b">
       <div class="review-tools">
-        <label class="mini"><input type="checkbox" id="selAll" checked> 全选匹配</label>
+        <label class="mini"><input type="checkbox" id="selAll" checked> <span id="selAllLabel">全选可投</span></label>
         <div class="review-actions">
           <button class="btn-stop" id="btnReviewStop" hidden>停止投递</button>
           <button class="btn-go" id="btnDeliver">投递选中</button>
