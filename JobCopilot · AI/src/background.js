@@ -937,6 +937,9 @@ async function runDeliver(jobIds) {
     log('  读取岗位JD...');
     let detailSource = 'search_card';
     let jdr = await sendToTab(tab.id, { type: 'OPEN_JD', job: job }, 30000);
+    if (jdr && jdr.success && Number(jdr.cardBatches) > 0) {
+      log('  滚动加载第 ' + Number(jdr.cardBatches) + ' 批后找到精确岗位卡片', 'success');
+    }
     if (jdr && !jdr.success && jdr.code === 'JOB_CARD_NOT_FOUND') {
       const detailUrl = exactJobDetailUrl(job);
       if (detailUrl) {
