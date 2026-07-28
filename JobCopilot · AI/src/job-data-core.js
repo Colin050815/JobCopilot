@@ -252,6 +252,7 @@
     ).toLowerCase();
     return message.includes('back/forward cache') ||
       message.includes('message channel is closed') ||
+      message.includes('message channel closed before a response was received') ||
       message.includes('message port closed before a response was received');
   }
 

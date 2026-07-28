@@ -225,6 +225,9 @@ test('recognizes BFCache channel closure as an expected navigation signal', () =
   assert.equal(isExpectedNavigationDisconnect(
     'The page keeping the extension port is moved into back/forward cache, so the message channel is closed.'
   ), true);
+  assert.equal(isExpectedNavigationDisconnect(
+    'A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received'
+  ), true);
   assert.equal(isExpectedNavigationDisconnect('Could not establish connection'), false);
 });
 
