@@ -116,9 +116,8 @@ function updateCollectionSource() {
   const recommend = $('collectionSource').value === 'recommend';
   if (recommend) $('screeningMode').value = 'ai';
   $('screeningMode').disabled = recommend;
-  $('city').disabled = recommend;
   $('collectionSourceNote').textContent = recommend
-    ? '从当前 BOSS 首页“精选职位”区域收集；城市由你的 BOSS 求职期望决定，插件不会使用城市输入框。'
+    ? '从当前 BOSS 首页“精选职位”区域收集；城市可编辑或清空，但不参与首页推荐筛选。当前推荐不足时会自动刷新并去重收集新岗位。'
     : '按目标岗位关键词和城市打开 BOSS 搜索结果并收集岗位。';
   updateScreeningMode();
 }

@@ -5,6 +5,7 @@ const deliveryGate = JobDataCore.createDeliveryGate();
 const followupGate = JobDataCore.createDeliveryGate();
 const MAX_OCR_IMAGES = 5;
 const MAX_OCR_DATA_LENGTH = 12 * 1024 * 1024;
+const MAX_RECOMMEND_REFRESHES = 24;
 const SCREEN_RESPONSE_FORMAT = {
   type: 'json_schema',
   json_schema: {
@@ -305,6 +306,9 @@ async function runCollect() {
           collectionSource: 'recommend',
           sourceSearchUrl: sourceUrl
         }));
+        if (response.refreshCount) {
+          log('首页推荐已自动刷新 ' + response.refreshCount + ' 次，并按岗位 ID 去重', 'success');
+        }
         log('首页推荐收集到 ' + state.jobs.length + ' 个岗位，准备按目标方向筛除无关岗位', 'success');
       }
     } catch (error) {
@@ -415,15 +419,80 @@ async function scrapeHomepageRecommendations(count) {
       await ensureInjected(candidate.id, 'src/content-search.js');
       const response = await sendToTab(candidate.id, { type: 'SCRAPE_RECOMMEND', count: count }, 120000);
       if (response && response.success && Array.isArray(response.jobs) && response.jobs.length) {
-        return { tab: candidate, response: response };
+        return collectRecommendationRefreshRounds(candidate, count, response);
       }
     } catch (error) {}
   }
 
   const tab = await ensureTab(buildRecommendationUrl());
-  await ensureInjected(tab.id, 'src/content-search.js');
-  const response = await sendToTab(tab.id, { type: 'SCRAPE_RECOMMEND', count: count }, 120000);
-  return { tab: tab, response: response };
+  return collectRecommendationRefreshRounds(tab, count, null);
+}
+
+async function collectRecommendationRefreshRounds(tab, count, initialResponse) {
+  let jobs = [];
+  let response = initialResponse;
+  let refreshCount = 0;
+  let refreshLimit = 4;
+  let noNewJobRounds = 0;
+  const warnings = [];
+
+  while (jobs.length < count && refreshCount <= MAX_RECOMMEND_REFRESHES) {
+    if (state.aborted) break;
+    await waitIfPaused();
+    if (state.aborted) break;
+
+    if (!response) {
+      await ensureInjected(tab.id, 'src/content-search.js');
+      response = await sendToTab(tab.id, { type: 'SCRAPE_RECOMMEND', count: count }, 120000);
+    }
+    if (response && response.success && Array.isArray(response.jobs)) {
+      const beforeMerge = jobs.length;
+      jobs = JobDataCore.mergeUniqueJobs(jobs, response.jobs, count);
+      if (beforeMerge === 0) {
+        refreshLimit = JobDataCore.recommendationRefreshLimit(count, response.jobs.length, MAX_RECOMMEND_REFRESHES);
+      }
+      if (refreshCount > 0) {
+        if (jobs.length === beforeMerge) noNewJobRounds++;
+        else noNewJobRounds = 0;
+      }
+      if (response.warning) warnings.push(response.warning);
+    } else if (response && response.error) {
+      warnings.push(response.error);
+      if (refreshCount > 0) noNewJobRounds++;
+    }
+
+    if (
+      jobs.length >= count ||
+      refreshCount >= refreshLimit ||
+      noNewJobRounds >= 2 ||
+      state.aborted
+    ) break;
+    log('当前推荐去重后 ' + jobs.length + '/' + count + '，正在刷新 BOSS 首页获取新推荐（' + (refreshCount + 1) + '/' + refreshLimit + '）...');
+    await chrome.tabs.reload(tab.id);
+    const loaded = await waitTabComplete(tab.id, 30000);
+    if (!loaded) {
+      warnings.push('刷新 BOSS 首页后等待加载超时');
+      break;
+    }
+    await sleep(2000);
+    refreshCount++;
+    response = null;
+  }
+
+  if (jobs.length < count && !state.aborted) {
+    const suffix = noNewJobRounds >= 2 ? '；连续两轮没有新岗位，已停止刷新' : '';
+    warnings.push('自动刷新 ' + refreshCount + ' 次后，共收集到 ' + jobs.length + '/' + count + ' 个不重复推荐岗位' + suffix);
+  }
+  return {
+    tab: tab,
+    response: {
+      success: jobs.length > 0,
+      jobs: jobs,
+      refreshCount: refreshCount,
+      warning: Array.from(new Set(warnings.filter(Boolean))).join('；'),
+      error: jobs.length ? '' : '未在 BOSS 首页找到可读取的“精选职位”岗位卡片'
+    }
+  };
 }
 
 // ── 流程：为手机端刚投递的会话生成并审核补充介绍 ──

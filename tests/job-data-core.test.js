@@ -14,6 +14,8 @@ const {
   normalizeCollectionSource,
   effectiveScreeningMode,
   obviousRecommendationMismatch,
+  mergeUniqueJobs,
+  recommendationRefreshLimit,
   mergeCityJobResults,
   mergeJobs,
   prepareDeliveryBatch,
@@ -142,6 +144,29 @@ test('rejects obvious service noise from technical homepage recommendations', ()
   assert.equal(obviousRecommendationMismatch('AI Agent / 全栈开发', '三角洲游戏陪玩'), true);
   assert.equal(obviousRecommendationMismatch('AI Agent / 全栈开发', 'AI全栈开发实习生'), false);
   assert.equal(obviousRecommendationMismatch('游戏陪玩', '三角洲游戏陪玩'), false);
+});
+
+test('deduplicates refreshed homepage recommendation batches and respects the target', () => {
+  const first = [
+    { id: 'job-a', name: 'AI 全栈开发' },
+    { id: 'job-b', name: 'Agent 实习生' }
+  ];
+  const refreshed = [
+    { id: 'job-b', name: 'Agent 实习生' },
+    { id: 'job-c', name: 'RAG 开发' },
+    { id: 'job-d', name: '后端开发' }
+  ];
+  assert.deepEqual(
+    mergeUniqueJobs(first, refreshed, 3).map(job => job.id),
+    ['job-a', 'job-b', 'job-c']
+  );
+});
+
+test('sizes homepage refresh rounds from the target and first recommendation batch', () => {
+  assert.equal(recommendationRefreshLimit(20, 9, 24), 5);
+  assert.equal(recommendationRefreshLimit(50, 9, 24), 8);
+  assert.equal(recommendationRefreshLimit(200, 9, 24), 24);
+  assert.equal(recommendationRefreshLimit(5, 9, 24), 4);
 });
 
 test('merges city results without duplicates and preserves each job search source', () => {

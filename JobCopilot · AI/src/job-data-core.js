@@ -124,6 +124,32 @@
     return technicalTarget && !targetAllowsService && serviceJob;
   }
 
+  function mergeUniqueJobs(existing, incoming, limit) {
+    const jobs = [];
+    const seen = new Set();
+    const max = Math.max(1, Math.floor(Number(limit) || 1));
+    for (const rawJob of [].concat(existing || [], incoming || [])) {
+      const job = rawJob || {};
+      const key = cleanText(job.id) || [
+        cleanText(job.name),
+        cleanText(job.company),
+        cleanText(job.area)
+      ].join('|');
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      jobs.push(job);
+      if (jobs.length >= max) break;
+    }
+    return jobs;
+  }
+
+  function recommendationRefreshLimit(targetCount, firstBatchSize, absoluteMax) {
+    const target = Math.max(1, Math.floor(Number(targetCount) || 1));
+    const batch = Math.max(1, Math.floor(Number(firstBatchSize) || 1));
+    const ceiling = Math.max(1, Math.floor(Number(absoluteMax) || 24));
+    return Math.min(ceiling, Math.max(4, Math.ceil(target / batch) + 2));
+  }
+
   function mergeCityJobResults(results, limit) {
     const jobs = [];
     const seen = new Set();
@@ -342,6 +368,8 @@
     normalizeCollectionSource: normalizeCollectionSource,
     effectiveScreeningMode: effectiveScreeningMode,
     obviousRecommendationMismatch: obviousRecommendationMismatch,
+    mergeUniqueJobs: mergeUniqueJobs,
+    recommendationRefreshLimit: recommendationRefreshLimit,
     mergeCityJobResults: mergeCityJobResults,
     normalizeArea: normalizeArea,
     parseApiJob: parseApiJob,
