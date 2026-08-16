@@ -1,5 +1,5 @@
 // ===== BOSS自动投递 Service Worker：编排 收集→筛选→审核→投递 + MuskAI GPT-5.6 =====
-importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/mobile-followup-core.js', '/src/job-detail-popup-capture.js', '/src/job-detail-tab-capture.js', '/src/trusted-click-core.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位与 AI 客户端
+importScripts('/src/selectors.js', '/src/job-data-core.js', '/src/greeting-core.js', '/src/mobile-followup-core.js', '/src/job-detail-popup-capture.js', '/src/job-detail-tab-capture.js', '/src/trusted-click-core.js', '/src/muskapi-client.js'); // 让 SW 使用城市、岗位、招呼语与 AI 客户端
 const aiClient = MuskAIClient.createClient();
 const deliveryGate = JobDataCore.createDeliveryGate();
 const followupGate = JobDataCore.createDeliveryGate();
@@ -18,6 +18,19 @@ const SCREEN_RESPONSE_FORMAT = {
         reason: { type: 'string' }
       },
       required: ['match', 'reason'],
+      additionalProperties: false
+    }
+  }
+};
+const GREETING_RESPONSE_FORMAT = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'boss_greeting',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: { greeting: { type: 'string' } },
+      required: ['greeting'],
       additionalProperties: false
     }
   }
@@ -105,11 +118,33 @@ async function screenJob(cfg, job) {
 
 // 投递时：结合该岗位的【完整JD】+ 简历，现场生成专属招呼语
 async function genGreetingFromJD(cfg, job, jd) {
-  const sys = '你是求职者本人，在BOSS直聘给HR发招呼语。回复会原样发给HR，严禁任何注释、说明、括号备注、字数统计或引导语。\n【格式】1.开头前15字必须是"熟悉XXX、XXX"(填该JD要求且你简历具备的核心技能1-2个)。2.紧接"做过XXX"说明简历里与该岗位相关的具体项目/经历。3.全文80-120字，真诚自然。';
   const jdText = (jd && jd.trim()) ? jd.trim() : ('技能标签：' + (job.tags || []).join('、'));
-  const user = '我的简历：\n' + resumeFull(cfg) + '\n\n目标岗位：' + (job.name || '') + (job.company ? ('（' + job.company + '）') : '') + '\n该岗位JD：\n' + jdText + '\n\n请按格式生成一段招呼语，开头必须"熟悉…"，直接输出招呼语本身，不要任何多余内容。';
-  const raw = await callAI(cfg, [{ role: 'system', content: sys }, { role: 'user', content: user }], 500);
-  return (raw || '').trim();
+  const firstRaw = await callAI(
+    cfg,
+    GreetingCore.buildMessages({ resumeText: resumeFull(cfg), job: job, jd: jdText }),
+    800,
+    GREETING_RESPONSE_FORMAT
+  );
+  const firstParsed = MuskAIClient.extractJsonObject(firstRaw);
+  const first = GreetingCore.sanitizeGreeting(firstParsed && firstParsed.greeting ? firstParsed.greeting : firstRaw);
+  const assessment = GreetingCore.assessGreeting(first);
+  if (assessment.ok) return first;
+
+  const retryRaw = await callAI(
+    cfg,
+    GreetingCore.buildMessages({
+      resumeText: resumeFull(cfg),
+      job: job,
+      jd: jdText,
+      previousDraft: first,
+      issues: assessment.issues
+    }),
+    800,
+    GREETING_RESPONSE_FORMAT
+  );
+  const retryParsed = MuskAIClient.extractJsonObject(retryRaw);
+  const retry = GreetingCore.sanitizeGreeting(retryParsed && retryParsed.greeting ? retryParsed.greeting : retryRaw);
+  return GreetingCore.chooseBetterGreeting(first, retry);
 }
 
 async function genSupplementFromJD(cfg, conversation, job, jd) {
