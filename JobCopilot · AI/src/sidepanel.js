@@ -4,6 +4,7 @@ const CFG_FIELDS = [
   'muskApiKey',
   'gptModel',
   'resumeText',
+  'collectionSource',
   'keyword',
   'city',
   'count',
@@ -43,8 +44,9 @@ chrome.storage.local.get(CFG_FIELDS.concat([
 ]), (d) => {
   CFG_FIELDS.forEach(f => { if (d[f] !== undefined && $(f)) $(f).value = d[f]; });
   if (!d.gptModel) $('gptModel').value = DEFAULT_MODEL;
+  if (!d.collectionSource) $('collectionSource').value = 'search';
   if (!d.screeningMode) $('screeningMode').value = 'bulk';
-  updateScreeningMode();
+  updateCollectionSource();
   updateFollowupScanMode();
   processedJobs = d.processed || {};
   mobileFollowupDrafts = Array.isArray(d.mobileFollowupDrafts) ? d.mobileFollowupDrafts : [];
@@ -94,17 +96,35 @@ $('followupScanMode').addEventListener('change', () => {
 updateFollowupScanMode();
 
 function updateScreeningMode() {
+  const recommend = $('collectionSource').value === 'recommend';
   const bulk = $('screeningMode').value !== 'ai';
-  $('btnCollect').textContent = bulk
+  $('btnCollect').textContent = recommend
+    ? '收集首页推荐 + AI筛选'
+    : bulk
     ? '开始收集 → 海投审核'
     : '开始收集 + AI筛选';
-  $('screeningModeNote').textContent = bulk
+  $('screeningModeNote').textContent = recommend
+    ? '首页推荐可能混入无关岗位，因此固定使用目标关键词和简历进行 AI 相关性筛选。'
+    : bulk
     ? '全部有效岗位进入人工审核；投递时仍会依据 JD 生成专属招呼语。'
     : '先把简历文字和岗位信息发送 MuskAI，只让匹配岗位进入审核。';
 }
 
 $('screeningMode').addEventListener('change', updateScreeningMode);
-updateScreeningMode();
+
+function updateCollectionSource() {
+  const recommend = $('collectionSource').value === 'recommend';
+  if (recommend) $('screeningMode').value = 'ai';
+  $('screeningMode').disabled = recommend;
+  $('city').disabled = recommend;
+  $('collectionSourceNote').textContent = recommend
+    ? '从当前 BOSS 首页“精选职位”区域收集；城市由你的 BOSS 求职期望决定，插件不会使用城市输入框。'
+    : '按目标岗位关键词和城市打开 BOSS 搜索结果并收集岗位。';
+  updateScreeningMode();
+}
+
+$('collectionSource').addEventListener('change', updateCollectionSource);
+updateCollectionSource();
 
 function showImages(images) {
   const preview = $('imgPrev');
@@ -441,12 +461,13 @@ $('btnSendFollowups').addEventListener('click', async () => {
 // 运行控制
 $('btnCollect').addEventListener('click', async () => {
   await saveCfgSync();
+  const recommend = $('collectionSource').value === 'recommend';
   if (
-    $('screeningMode').value === 'ai' &&
+    (recommend || $('screeningMode').value === 'ai') &&
     !$('muskApiKey').value.trim()
   ) return addLog('AI 精准筛选需要先填写 MuskAI API Key', 'error');
   if (
-    $('screeningMode').value === 'ai' &&
+    (recommend || $('screeningMode').value === 'ai') &&
     !$('resumeText').value.trim()
   ) return addLog('AI 精准筛选需要先填写简历文字', 'error');
   if (!$('keyword').value.trim()) return addLog('请先填岗位关键词', 'error');
@@ -588,7 +609,10 @@ function setRunning(running) {
   $('followupEnd').disabled = running;
   $('followupScanMode').disabled = running;
   $('followupConversationCount').disabled = running;
+  $('collectionSource').disabled = running;
   $('screeningMode').disabled = running;
+  $('city').disabled = running;
+  if (!running) updateCollectionSource();
   if (!running) $('btnPause').textContent = '暂停';
   if (running) startKeepAlive();
   else stopKeepAlive();

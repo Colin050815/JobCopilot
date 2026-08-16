@@ -11,6 +11,9 @@ const {
   parseCityNames,
   resolveCitySearches,
   allocateCityTargets,
+  normalizeCollectionSource,
+  effectiveScreeningMode,
+  obviousRecommendationMismatch,
   mergeCityJobResults,
   mergeJobs,
   prepareDeliveryBatch,
@@ -125,6 +128,20 @@ test('allocates the total target evenly and keeps at least one job per city', ()
   assert.deepEqual(allocateCityTargets(2, 20), [10, 10]);
   assert.deepEqual(allocateCityTargets(2, 5), [3, 2]);
   assert.deepEqual(allocateCityTargets(2, 1), [1, 1]);
+});
+
+test('forces AI screening for homepage recommendations while preserving search choices', () => {
+  assert.equal(normalizeCollectionSource('recommend'), 'recommend');
+  assert.equal(normalizeCollectionSource('unknown'), 'search');
+  assert.equal(effectiveScreeningMode('recommend', 'bulk'), 'ai');
+  assert.equal(effectiveScreeningMode('search', 'bulk'), 'bulk');
+  assert.equal(effectiveScreeningMode('search', 'ai'), 'ai');
+});
+
+test('rejects obvious service noise from technical homepage recommendations', () => {
+  assert.equal(obviousRecommendationMismatch('AI Agent / 全栈开发', '三角洲游戏陪玩'), true);
+  assert.equal(obviousRecommendationMismatch('AI Agent / 全栈开发', 'AI全栈开发实习生'), false);
+  assert.equal(obviousRecommendationMismatch('游戏陪玩', '三角洲游戏陪玩'), false);
 });
 
 test('merges city results without duplicates and preserves each job search source', () => {

@@ -39,7 +39,14 @@
       <input type="file" id="resumeImg" accept="image/*">
       <div id="imgPrev"></div>
 
-      <label>岗位关键词</label>
+      <label>岗位来源</label>
+      <select id="collectionSource">
+        <option value="search" selected>关键词搜索结果</option>
+        <option value="recommend">BOSS 首页推荐（强制 AI 筛选）</option>
+      </select>
+      <div class="privacy-note" id="collectionSourceNote">按关键词和城市打开 BOSS 搜索结果并收集岗位。</div>
+
+      <label>目标岗位关键词</label>
       <input type="text" id="keyword" placeholder="如：数据分析 / AI应用">
 
       <label>城市（多个城市用 / 或逗号分隔）</label>

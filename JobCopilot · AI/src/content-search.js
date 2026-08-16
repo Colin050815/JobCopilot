@@ -8,6 +8,63 @@
 
   function getCards() { return Array.from(document.querySelectorAll(SELECTORS.jobs.jobCard)); }
 
+  function visible(element) {
+    return Boolean(element && (element.offsetParent !== null || getComputedStyle(element).position === 'fixed'));
+  }
+
+  function jobDetailLinks(root) {
+    return Array.from((root || document).querySelectorAll('a[href*="/job_detail/"]'))
+      .filter(link => visible(link) && /\/job_detail\/[^/?#]+\.html/i.test(link.href || ''));
+  }
+
+  function recommendationRoot() {
+    const candidates = document.querySelectorAll('h1, h2, h3, h4, div, span');
+    let heading = null;
+    for (const element of candidates) {
+      if (visible(element) && (element.textContent || '').trim() === '精选职位') {
+        heading = element;
+        break;
+      }
+    }
+    if (!heading) return null;
+    let root = heading.parentElement;
+    for (let depth = 0; root && depth < 8; depth++, root = root.parentElement) {
+      if (jobDetailLinks(root).length >= 2) return root;
+    }
+    return null;
+  }
+
+  function recommendationCardForLink(link, root) {
+    let card = link;
+    let current = link;
+    for (let depth = 0; current && depth < 8; depth++) {
+      const parent = current.parentElement;
+      if (!parent || parent === root || parent === document.body) break;
+      const linkCount = parent.querySelectorAll('a[href*="/job_detail/"]').length;
+      if (linkCount > 1) break;
+      card = parent;
+      current = parent;
+    }
+    return card;
+  }
+
+  function getRecommendationCards() {
+    const root = recommendationRoot();
+    if (!root) return [];
+    const seen = new Set();
+    const cards = [];
+    for (const link of jobDetailLinks(root)) {
+      const match = link.href.match(/\/job_detail\/([^.?/]+)\.html/i);
+      const id = match && match[1];
+      if (!id || seen.has(id)) continue;
+      const card = recommendationCardForLink(link, root);
+      if (!card || (card.innerText || card.textContent || '').trim().length < 4) continue;
+      seen.add(id);
+      cards.push({ card: card, link: link });
+    }
+    return cards;
+  }
+
   function readElementText(element, attributes) {
     if (!element) return '';
     for (const attribute of attributes || []) {
@@ -17,12 +74,12 @@
     return (element.innerText || element.textContent || '').trim();
   }
 
-  function parseCard(card) {
-    const nameEl = card.querySelector(SELECTORS.jobs.jobName);
+  function parseCard(card, preferredLink) {
+    const linkEl = preferredLink || card.querySelector('a[href*="/job_detail/"]') || card.querySelector('a[ka][href]') || card.querySelector('a');
+    const nameEl = card.querySelector(SELECTORS.jobs.jobName) || linkEl;
     const salEl = card.querySelector(SELECTORS.jobs.jobSalary);
     const compEl = card.querySelector(SELECTORS.jobs.company);
     const areaEl = card.querySelector(SELECTORS.jobs.area);
-    const linkEl = card.querySelector('a[href*="/job_detail/"]') || card.querySelector('a[ka][href]') || card.querySelector('a');
     const link = linkEl ? linkEl.href : '';
     const m = link.match(/job_detail\/([^.?]+)\.html/);
     const id = (m && m[1]) || ((nameEl ? nameEl.textContent.trim() : '') + '|' + (salEl ? salEl.textContent.trim() : ''));
@@ -101,6 +158,44 @@
       ? jobData.mergeJobs(jobs, apiResult.jobs, count)
       : jobs.slice(0, count);
     return { jobs: merged, warning: apiResult.warning };
+  }
+
+  async function scrapeRecommendations(count) {
+    if (!recommendationRoot()) {
+      return {
+        jobs: [],
+        warning: '当前页面不是包含“精选职位”的 BOSS 首页'
+      };
+    }
+    const seen = new Set();
+    const jobs = [];
+    let stall = 0;
+    for (let loop = 0; loop < 30 && jobs.length < count && stall < 4; loop++) {
+      let added = 0;
+      for (const item of getRecommendationCards()) {
+        const job = parseCard(item.card, item.link);
+        if (!job.id || seen.has(job.id)) continue;
+        seen.add(job.id);
+        jobs.push(job);
+        added++;
+        if (jobs.length >= count) break;
+      }
+      if (added) stall = 0;
+      else stall++;
+      if (jobs.length >= count) break;
+      window.scrollTo(0, document.body.scrollHeight);
+      const root = recommendationRoot();
+      if (root && root.scrollHeight > root.clientHeight) {
+        root.scrollTop = root.scrollHeight;
+      }
+      await sleep(1000);
+    }
+    return {
+      jobs: jobs.slice(0, count),
+      warning: jobs.length
+        ? ''
+        : '未在当前 BOSS 首页找到“精选职位”岗位卡片，请先确认首页已正常显示推荐岗位'
+    };
   }
 
   function findLoadedCardByJob(job) {
@@ -270,6 +365,12 @@
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'SCRAPE') {
       scrape(msg.count || 20)
+        .then(result => sendResponse({ success: true, jobs: result.jobs, warning: result.warning }))
+        .catch(e => sendResponse({ success: false, error: e.message }));
+      return true;
+    }
+    if (msg.type === 'SCRAPE_RECOMMEND') {
+      scrapeRecommendations(msg.count || 20)
         .then(result => sendResponse({ success: true, jobs: result.jobs, warning: result.warning }))
         .catch(e => sendResponse({ success: false, error: e.message }));
       return true;

@@ -97,6 +97,33 @@
     });
   }
 
+  function normalizeCollectionSource(value) {
+    return cleanText(value) === 'recommend' ? 'recommend' : 'search';
+  }
+
+  function effectiveScreeningMode(collectionSource, screeningMode) {
+    if (normalizeCollectionSource(collectionSource) === 'recommend') return 'ai';
+    return cleanText(screeningMode) === 'ai' ? 'ai' : 'bulk';
+  }
+
+  function obviousRecommendationMismatch(targetKeyword, jobName) {
+    const target = cleanText(targetKeyword).toLowerCase();
+    const name = cleanText(jobName).toLowerCase();
+    if (!target || !name) return false;
+    const technicalTerms = [
+      'ai', 'agent', '人工智能', '大模型', '算法', '开发', '工程师', '程序员',
+      '全栈', '后端', '前端', '测试', '运维', 'python', 'java', 'rag', 'llm'
+    ];
+    const unrelatedServiceTerms = [
+      '陪玩', '主播', '直播', '客服', '销售', '骑手', '服务员', '店员', '普工',
+      '操作工', '保安', '保洁', '家政', '美容', '健身教练', '电话营销'
+    ];
+    const technicalTarget = technicalTerms.some(term => target.includes(term));
+    const targetAllowsService = unrelatedServiceTerms.some(term => target.includes(term));
+    const serviceJob = unrelatedServiceTerms.some(term => name.includes(term));
+    return technicalTarget && !targetAllowsService && serviceJob;
+  }
+
   function mergeCityJobResults(results, limit) {
     const jobs = [];
     const seen = new Set();
@@ -312,6 +339,9 @@
     parseCityNames: parseCityNames,
     resolveCitySearches: resolveCitySearches,
     allocateCityTargets: allocateCityTargets,
+    normalizeCollectionSource: normalizeCollectionSource,
+    effectiveScreeningMode: effectiveScreeningMode,
+    obviousRecommendationMismatch: obviousRecommendationMismatch,
     mergeCityJobResults: mergeCityJobResults,
     normalizeArea: normalizeArea,
     parseApiJob: parseApiJob,

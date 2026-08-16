@@ -55,7 +55,7 @@ function log(text, level) { touchActivity(); chrome.runtime.sendMessage({ type: 
 function pushPhase() { touchActivity(); chrome.runtime.sendMessage({ type: 'PHASE', phase: state.phase }).catch(() => {}); }
 function progress(cur, total, label) { touchActivity(); chrome.runtime.sendMessage({ type: 'PROGRESS', cur: cur, total: total, label: label || '' }).catch(() => {}); }
 async function waitIfPaused() { while (state.paused && !state.aborted) await sleep(400); }
-function getCfg() { return chrome.storage.local.get(['muskApiKey', 'gptModel', 'resumeText', 'resumeImage', 'resumeImages', 'city', 'keyword', 'count']); }
+function getCfg() { return chrome.storage.local.get(['muskApiKey', 'gptModel', 'resumeText', 'resumeImage', 'resumeImages', 'collectionSource', 'screeningMode', 'city', 'keyword', 'count']); }
 function resumeFull(cfg) { return (cfg.resumeText || '').trim(); }
 function jobInfo(j) { return '岗位：' + (j.name || '') + '\n技能标签：' + ((j.tags || []).join('、')) + '\n薪资：' + (j.salary || '') + '\n公司：' + (j.company || '') + '\n地区：' + (j.area || ''); }
 function findJob(id) { for (var i = 0; i < state.jobs.length; i++) if (state.jobs[i].id === id) return state.jobs[i]; return null; }
@@ -75,8 +75,17 @@ async function callAI(cfg, messages, maxCompletionTokens, responseFormat) {
 
 // 筛选：只判断是否值得投（用岗位标签快速判断，不生成招呼语）
 async function screenJob(cfg, job) {
-  const sys = '你是资深求职助手。请完全依据下面提供的【求职者简历】，判断某个岗位是否值得该求职者投递。\n【判断标准·适中】保留(match=true)：岗位方向与求职者简历的专业/技能/经历相关，且求职者的经验年限、学历、级别够得着该岗位（不超纲）。剔除(match=false)：方向与简历明显无关；岗位要求的经验/学历/硬技能明显超出简历；岗位级别明显高于求职者当前水平。请依据简历本身判断，不要套用任何固定行业或级别。\n【输出】只输出一个JSON对象，不要markdown：{"match":true或false,"reason":"一句话理由"}';
-  const user = '求职者简历：\n' + resumeFull(cfg) + '\n\n待判断岗位：\n' + jobInfo(job) + '\n\n严格输出JSON。';
+  if (
+    JobDataCore.normalizeCollectionSource(cfg.collectionSource) === 'recommend' &&
+    JobDataCore.obviousRecommendationMismatch(cfg.keyword, job && job.name)
+  ) {
+    return { match: false, reason: '岗位名称与目标技术方向明显无关，已在 AI 请求前剔除' };
+  }
+  const recommendationRule = JobDataCore.normalizeCollectionSource(cfg.collectionSource) === 'recommend'
+    ? '\n【首页推荐严格规则】推荐流会混入噪声岗位。岗位名称或工作方向只要与目标岗位关键词明显无关，就必须返回 match=false；不得因为“学历可达”“薪资合适”或公司看起来正常而保留。'
+    : '';
+  const sys = '你是资深求职助手。请依据【目标岗位关键词】和【求职者简历】，判断某个岗位是否值得投递。\n【判断标准·适中】保留(match=true)：岗位方向与目标关键词一致或高度相关，且与求职者专业/技能/经历相关，经验年限、学历、级别够得着。剔除(match=false)：岗位方向与目标关键词明显无关；工作内容与简历明显无关；经验/学历/硬技能明显超出简历；岗位级别明显过高。' + recommendationRule + '\n【输出】只输出一个JSON对象，不要markdown：{"match":true或false,"reason":"一句话理由"}';
+  const user = '目标岗位关键词：' + (cfg.keyword || '') + '\n\n求职者简历：\n' + resumeFull(cfg) + '\n\n待判断岗位：\n' + jobInfo(job) + '\n\n严格输出JSON。';
   const raw = await callAI(
     cfg,
     [{ role: 'system', content: sys }, { role: 'user', content: user }],
@@ -255,6 +264,9 @@ function buildSearchUrl(cfg, city) {
   // 行业/规模：BOSS 代码不确定，暂不加入（错误代码会导致搜不到任何岗位）
   return 'https://www.zhipin.com/web/geek/jobs?' + params.toString();
 }
+function buildRecommendationUrl() {
+  return 'https://www.zhipin.com/';
+}
 async function ensureTab(url) {
   let tabs = await chrome.tabs.query({ url: '*://*.zhipin.com/*' });
   let tab = tabs[0];
@@ -272,58 +284,80 @@ async function runCollect() {
   state.jobs = []; state.screened = []; state.greetings = {}; state.results = [];
   state.phase = 'collecting'; pushPhase();
   const cfg = await getCfg();
-  const screeningMode = cfg.screeningMode === 'ai' ? 'ai' : 'bulk';
+  const collectionSource = JobDataCore.normalizeCollectionSource(cfg.collectionSource);
+  const screeningMode = JobDataCore.effectiveScreeningMode(collectionSource, cfg.screeningMode);
   if (screeningMode === 'ai' && !cfg.muskApiKey) { log('AI 精准筛选需要 MuskAI API Key', 'error'); state.phase = 'idle'; pushPhase(); return; }
   if (!cfg.keyword) { log('请先填写岗位关键词', 'error'); state.phase = 'idle'; pushPhase(); return; }
   if (screeningMode === 'ai' && !(cfg.resumeText || '').trim()) { log('AI 精准筛选需要先填写“简历文字”', 'error'); state.phase = 'idle'; pushPhase(); return; }
 
   const count = Math.min(200, Math.max(1, parseInt(cfg.count) || 20));
-  const cityResolution = resolveCities(cfg);
-  const cities = cityResolution.cities;
-  const targets = JobDataCore.allocateCityTargets(cities.length, count);
-  const effectiveTarget = targets.reduce((sum, value) => sum + value, 0);
-  const cityResults = [];
-
-  if (cityResolution.unknown.length) {
-    const action = cityResolution.usedFallback ? '未识别任何城市，已按全国搜索' : '已忽略';
-    log('未识别城市：' + cityResolution.unknown.join('、') + '；' + action, 'warn');
-  }
-  if (effectiveTarget !== count) {
-    log('收集数量少于城市数，已调整为每个城市至少 1 个岗位', 'warn');
-  }
-  log('开始多城市收集：' + cities.map(city => city.name).join('、') + ' | 总目标 ' + effectiveTarget + ' 个');
-
-  for (let index = 0; index < cities.length; index++) {
-    if (state.aborted) break;
-    await waitIfPaused();
-    if (state.aborted) break;
-    const city = cities[index];
-    const cityTarget = targets[index];
-    const searchUrl = buildSearchUrl(cfg, city);
-    log('[' + (index + 1) + '/' + cities.length + '] 打开 ' + city.name + ' 搜索页，目标 ' + cityTarget + ' 个岗位');
+  if (collectionSource === 'recommend') {
+    log('开始读取 BOSS 首页“精选职位”，目标 ' + count + ' 个；本模式固定执行 AI 相关性筛选');
     try {
-      const tab = await ensureTab(searchUrl);
-      await ensureInjected(tab.id, 'src/content-search.js');
-      const r = await sendToTab(tab.id, { type: 'SCRAPE', count: cityTarget }, 120000);
-      if (!r || !r.success) {
-        log(city.name + '收集失败：' + ((r && r.error) || '页面无响应'), 'error');
-        continue;
+      const collected = await scrapeHomepageRecommendations(count);
+      const response = collected.response;
+      if (!response || !response.success) {
+        log('首页推荐收集失败：' + ((response && response.error) || '页面无响应'), 'error');
+      } else {
+        if (response.warning) log(response.warning, 'warn');
+        const sourceUrl = (collected.tab && collected.tab.url) || buildRecommendationUrl();
+        state.jobs = (response.jobs || []).map(job => Object.assign({}, job, {
+          collectionSource: 'recommend',
+          sourceSearchUrl: sourceUrl
+        }));
+        log('首页推荐收集到 ' + state.jobs.length + ' 个岗位，准备按目标方向筛除无关岗位', 'success');
       }
-      if (r.warning) log(city.name + '：' + r.warning, 'warn');
-      cityResults.push({
-        cityName: city.name,
-        cityCode: city.code,
-        searchUrl: searchUrl,
-        jobs: r.jobs || []
-      });
-      log(city.name + '收集到 ' + ((r.jobs && r.jobs.length) || 0) + ' 个岗位', 'success');
     } catch (error) {
-      log(city.name + '收集失败：' + (error.message || '页面导航异常'), 'error');
+      log('首页推荐收集失败：' + (error.message || '页面导航异常'), 'error');
     }
-  }
+  } else {
+    const cityResolution = resolveCities(cfg);
+    const cities = cityResolution.cities;
+    const targets = JobDataCore.allocateCityTargets(cities.length, count);
+    const effectiveTarget = targets.reduce((sum, value) => sum + value, 0);
+    const cityResults = [];
 
-  state.jobs = JobDataCore.mergeCityJobResults(cityResults, effectiveTarget);
-  log('多城市合并去重后共 ' + state.jobs.length + ' 个岗位', 'success');
+    if (cityResolution.unknown.length) {
+      const action = cityResolution.usedFallback ? '未识别任何城市，已按全国搜索' : '已忽略';
+      log('未识别城市：' + cityResolution.unknown.join('、') + '；' + action, 'warn');
+    }
+    if (effectiveTarget !== count) {
+      log('收集数量少于城市数，已调整为每个城市至少 1 个岗位', 'warn');
+    }
+    log('开始多城市收集：' + cities.map(city => city.name).join('、') + ' | 总目标 ' + effectiveTarget + ' 个');
+
+    for (let index = 0; index < cities.length; index++) {
+      if (state.aborted) break;
+      await waitIfPaused();
+      if (state.aborted) break;
+      const city = cities[index];
+      const cityTarget = targets[index];
+      const searchUrl = buildSearchUrl(cfg, city);
+      log('[' + (index + 1) + '/' + cities.length + '] 打开 ' + city.name + ' 搜索页，目标 ' + cityTarget + ' 个岗位');
+      try {
+        const tab = await ensureTab(searchUrl);
+        await ensureInjected(tab.id, 'src/content-search.js');
+        const r = await sendToTab(tab.id, { type: 'SCRAPE', count: cityTarget }, 120000);
+        if (!r || !r.success) {
+          log(city.name + '收集失败：' + ((r && r.error) || '页面无响应'), 'error');
+          continue;
+        }
+        if (r.warning) log(city.name + '：' + r.warning, 'warn');
+        cityResults.push({
+          cityName: city.name,
+          cityCode: city.code,
+          searchUrl: searchUrl,
+          jobs: r.jobs || []
+        });
+        log(city.name + '收集到 ' + ((r.jobs && r.jobs.length) || 0) + ' 个岗位', 'success');
+      } catch (error) {
+        log(city.name + '收集失败：' + (error.message || '页面导航异常'), 'error');
+      }
+    }
+
+    state.jobs = JobDataCore.mergeCityJobResults(cityResults, effectiveTarget);
+    log('多城市合并去重后共 ' + state.jobs.length + ' 个岗位', 'success');
+  }
   if (!state.jobs.length) { state.phase = 'idle'; pushPhase(); return; }
 
   if (screeningMode === 'bulk') {
@@ -370,6 +404,26 @@ async function runCollect() {
   await chrome.storage.local.set({ sw_jobs: state.jobs, sw_greetings: state.greetings, sw_screened: state.screened });
   state.phase = 'review'; pushPhase();
   chrome.runtime.sendMessage({ type: 'SCREENED', screened: state.screened }).catch(() => {});
+}
+
+async function scrapeHomepageRecommendations(count) {
+  const tabs = await chrome.tabs.query({ url: '*://*.zhipin.com/*' });
+  const candidates = tabs.slice().sort((left, right) => Number(Boolean(right.active)) - Number(Boolean(left.active)));
+  for (const candidate of candidates) {
+    try {
+      if (candidate.status !== 'complete') await waitTabComplete(candidate.id, 15000);
+      await ensureInjected(candidate.id, 'src/content-search.js');
+      const response = await sendToTab(candidate.id, { type: 'SCRAPE_RECOMMEND', count: count }, 120000);
+      if (response && response.success && Array.isArray(response.jobs) && response.jobs.length) {
+        return { tab: candidate, response: response };
+      }
+    } catch (error) {}
+  }
+
+  const tab = await ensureTab(buildRecommendationUrl());
+  await ensureInjected(tab.id, 'src/content-search.js');
+  const response = await sendToTab(tab.id, { type: 'SCRAPE_RECOMMEND', count: count }, 120000);
+  return { tab: tab, response: response };
 }
 
 // ── 流程：为手机端刚投递的会话生成并审核补充介绍 ──
@@ -930,22 +984,30 @@ async function runDeliver(jobIds) {
     if (!job) { log('[' + (k + 1) + '/' + ids.length + '] 找不到岗位数据，跳过', 'warn'); continue; }
     log('[' + (k + 1) + '/' + ids.length + '] ' + job.name + ' - ' + (job.company || ''));
 
-    // 1. 回搜索页，点开卡片读取该岗位完整JD
+    // 1. 搜索结果岗位回原列表精确定位；首页推荐岗位直接使用已保存的精确详情链接
     const searchUrl = job.sourceSearchUrl || buildSearchUrl(cfg);
     const tab = await ensureTab(searchUrl);
-    await ensureInjected(tab.id, 'src/content-search.js');
     log('  读取岗位JD...');
-    let detailSource = 'search_card';
-    let jdr = await sendToTab(tab.id, { type: 'OPEN_JD', job: job }, 30000);
-    if (jdr && jdr.success && Number(jdr.cardBatches) > 0) {
-      log('  滚动加载第 ' + Number(jdr.cardBatches) + ' 批后找到精确岗位卡片', 'success');
-    }
-    if (jdr && !jdr.success && jdr.code === 'JOB_CARD_NOT_FOUND') {
+    let detailSource = job.collectionSource === 'recommend' ? 'job_detail' : 'search_card';
+    let jdr;
+    if (detailSource === 'job_detail') {
       const detailUrl = exactJobDetailUrl(job);
-      if (detailUrl) {
-        log('  当前搜索批次未显示该卡片，改用已保存的精确岗位链接...');
-        jdr = await readJobDetailInTab(tab.id, detailUrl, job);
-        if (jdr && jdr.success) detailSource = 'job_detail';
+      jdr = detailUrl
+        ? await readJobDetailInTab(tab.id, detailUrl, job)
+        : { success: false, error: '首页推荐岗位缺少可核验的精确详情链接' };
+    } else {
+      await ensureInjected(tab.id, 'src/content-search.js');
+      jdr = await sendToTab(tab.id, { type: 'OPEN_JD', job: job }, 30000);
+      if (jdr && jdr.success && Number(jdr.cardBatches) > 0) {
+        log('  滚动加载第 ' + Number(jdr.cardBatches) + ' 批后找到精确岗位卡片', 'success');
+      }
+      if (jdr && !jdr.success && jdr.code === 'JOB_CARD_NOT_FOUND') {
+        const detailUrl = exactJobDetailUrl(job);
+        if (detailUrl) {
+          log('  当前搜索批次未显示该卡片，改用已保存的精确岗位链接...');
+          jdr = await readJobDetailInTab(tab.id, detailUrl, job);
+          if (jdr && jdr.success) detailSource = 'job_detail';
+        }
       }
     }
     if (!jdr || !jdr.success) {
